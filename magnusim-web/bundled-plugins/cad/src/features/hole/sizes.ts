@@ -8,6 +8,8 @@
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import type { ExtrudeExtentDef } from '../../types/doc';
+
 export type ClearanceFit = 'close' | 'normal' | 'loose';
 
 /** One metric size: its major diameter, ISO 261 coarse pitch and ISO 273 clearance holes (mm). */
@@ -46,11 +48,12 @@ const ROWS: readonly [number, number, number, number, number][] = [
 
 export const METRIC_SIZES: readonly MetricSize[] = ROWS.map(([d, pitch, close, normal, loose]) => ({ size: `M${d}`, d, pitch, close, normal, loose }));
 
-/** The row for "M6" (any case, "M6x1" too), or null. */
+/** The row for "M6" (any case; "M6x1" too, but only with its coarse pitch: the tables are for coarse threads), or null. */
 export function metricSize(size: string): MetricSize | null {
-  const m = /^\s*m\s*(\d+(?:\.\d+)?)\s*(?:x\s*[\d.]+)?\s*$/i.exec(size);
+  const m = /^\s*m\s*(\d+(?:\.\d+)?)\s*(?:x\s*([\d.]+))?\s*$/i.exec(size);
   if (!m) return null;
-  return METRIC_SIZES.find((r) => Math.abs(r.d - Number(m[1])) < 1e-9) ?? null;
+  const row = METRIC_SIZES.find((r) => Math.abs(r.d - Number(m[1])) < 1e-9) ?? null;
+  return row && (m[2] === undefined || Math.abs(Number(m[2]) - row.pitch) < 1e-9) ? row : null;
 }
 
 /** The ISO 273 clearance hole for a bolt size and fit (mm), or null for a size not in the table. */
@@ -105,11 +108,16 @@ export function counterboreFor(size: string): { diameter: number; depth: number 
   return row ? { diameter: row[1], depth: row[2] } : null;
 }
 
-/** The countersink for an ISO 10642 countersunk head screw of this size (90 deg), or null. */
-export function countersinkFor(size: string): { diameter: number; angle: number } | null {
+/** The countersink for an ISO 10642 countersunk head screw of this size (its diameter at the face, mm; the angle is 90 deg), or null. */
+export function countersinkFor(size: string): { diameter: number } | null {
   const r = metricSize(size);
   const row = r ? COUNTERSINKS.find((x) => Math.abs(x[0] - r.d) < 1e-9) : undefined;
-  return row ? { diameter: row[1], angle: 90 } : null;
+  return row ? { diameter: row[1] } : null;
+}
+
+/** How deep a cut's cosmetic thread runs, in words: a Blind cut's distance, else the whole hole (its cut's own extent). */
+export function threadDepthWords(extent: ExtrudeExtentDef): string {
+  return extent.kind === 'blind' ? `${extent.distance} deep` : extent.kind === 'through_all' ? 'the whole hole' : "the cut's depth";
 }
 
 /** The sizes each table has, for the words of a refusal ("M3 to M30"). */

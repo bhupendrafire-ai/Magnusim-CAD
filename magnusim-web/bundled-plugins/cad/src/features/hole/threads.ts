@@ -74,7 +74,7 @@ function threadsOf(services: AppServices): { list: ThreadDraw[]; key: string } {
     const body = f.scope[0] ?? null;
     const shape = length == null ? (s.rebuild.bodies.find((b) => b.id === body)?.shape ?? null) : null;
     list.push({ name: f.name, thread: f.thread!, centres, d, x: out.plane.xdir as Vec3, length, body });
-    parts.push(JSON.stringify([f.name, f.thread, centres, d, length, shape]));
+    parts.push(JSON.stringify([f.name, f.thread, centres, d, out.plane.xdir, length, shape]));
   }
   return { list, key: parts.join('|') };
 }

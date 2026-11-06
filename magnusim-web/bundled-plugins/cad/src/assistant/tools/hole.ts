@@ -44,7 +44,7 @@
 // features (plan.cuts, cutFields), so a hole either made is the other's: editable either way.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DEFAULT_DISTANCE } from '../../features/extrude/def';
+import { DEFAULT_DISTANCE, TAPER_MAX_DEG } from '../../features/extrude/def';
 import { clearanceDiameter, counterboreFor, COUNTERBORE_SIZES, countersinkFor, COUNTERSINK_SIZES, metricSize, tapDrill, threadName, type ClearanceFit } from '../../features/hole/sizes';
 import type { SketchOutput } from '../../types/sketch';
 import { faceFrame, toModel, ydirOf } from '../../features/sketch/plane';
@@ -147,6 +147,8 @@ export interface HolePlan extends EditPlan {
   bore: FeatureId | null;
   /** Whether the drill tip was made (apply leaves it out when the holes went through). */
   tipMade: boolean;
+  /** Whether two holes overlap (they then share one bottom, so fewer bottoms is not "went through"). */
+  overlap: boolean;
 }
 
 /** The model axis a direction runs along within 1 degree, and which way; or null. */
@@ -303,7 +305,7 @@ export function boreWarning(services: AppServices, plan: HolePlan): string | nul
   if (plan.depth === null) return null;
   const bottoms = bottomsOf(services, plan).length;
   if (bottoms === 0) return plan.tip ? null : throughWords(plan);
-  if (bottoms < plan.centers.length && !plan.warnings.some((w) => / overlap: /.test(w))) return throughWords(plan, bottoms);
+  if (bottoms < plan.centers.length && !plan.overlap) return throughWords(plan, bottoms);
   return null;
 }
 
@@ -372,13 +374,19 @@ const holeTool: EditTool<Plan> = {
       noTable = !cb;
       if (!cb) problems.push(`cb_diameter, cb_depth: the socket head screw table has ${COUNTERBORE_SIZES}; give both for ${size.toUpperCase()}`);
       else {
+        const filled = !cbDiameter && !cbDepth ? '' : !cbDiameter ? 'its diameter ' : 'its depth ';
         cbDiameter ||= `${cb.diameter} mm`;
         cbDepth ||= `${cb.depth} mm`;
-        headWords = `for an ${size.toUpperCase()} socket head cap screw (ISO 4762, DIN 974-1)`;
+        headWords = `${filled ? `(${filled}` : ''}for an ${size.toUpperCase()} socket head cap screw (ISO 4762, DIN 974-1)${filled ? ')' : ''}`;
       }
     }
-    const at90 = !str(input.cs_angle) || (services.doc.units.evaluate(str(input.cs_angle), 'angle') as { ok: boolean; value?: number }).value === 90;
-    if (type === 'countersink' && clearance && metricSize(size) && !csDiameter && at90) {
+    // The countersunk screw table is for 90 deg heads: an angle given must be 90 deg.
+    const at90 = () => {
+      if (!str(input.cs_angle)) return true;
+      const r = units.evaluate(str(input.cs_angle), 'angle');
+      return r.ok && Math.abs(r.value - 90) < 1e-9;
+    };
+    if (type === 'countersink' && clearance && metricSize(size) && !csDiameter && at90()) {
       const cs = countersinkFor(size);
       noTable = !cs;
       if (!cs) problems.push(`cs_diameter: the countersunk screw table has ${COUNTERSINK_SIZES}; give it for ${size.toUpperCase()}`);
@@ -471,14 +479,14 @@ const holeTool: EditTool<Plan> = {
       }
       if (csD !== null && csA !== null) {
         if (!(csD > D!)) where.push(`cs_diameter: wider than the hole (${len(csD)} mm, the hole is ${len(D!)} mm)`);
-        if (!(csA > 0 && csA < 180)) where.push(`cs_angle: more than 0 and less than 180 deg (it is ${len(csA)} deg)`);
+        if (!(csA > 0 && csA <= 2 * TAPER_MAX_DEG)) where.push(`cs_angle: more than 0 and at most ${2 * TAPER_MAX_DEG} deg (it is ${len(csA)} deg)`);
         else {
           const h = (csD - D!) / 2 / Math.tan((csA * Math.PI) / 360);
           if (deep !== null && csD > D! && !(h < deep)) where.push(`cs_diameter: its cone is ${len(h)} mm deep, more than the hole's ${len(deep)} mm`);
           step = { diameter: csD, depth: h, angle: csA };
         }
       }
-      if (tipA !== null && !(tipA > 0 && tipA < 180)) where.push(`tip_angle: more than 0 and less than 180 deg (it is ${len(tipA)} deg)`);
+      if (tipA !== null && !(tipA > 0 && tipA <= 2 * TAPER_MAX_DEG)) where.push(`tip_angle: more than 0 and at most ${2 * TAPER_MAX_DEG} deg (it is ${len(tipA)} deg)`);
       const centers: Vec3[] = [];
       for (const [r, row] of read.entries()) {
         const p = row.p as number[];
@@ -523,12 +531,16 @@ const holeTool: EditTool<Plan> = {
           if (near < D! / 2 - 1e-6) warnings.push(`${rowName(r)} ${at(p)} is ${len(near)} mm from an edge of ${label}: the hole ${len(D!)} mm across breaks that edge (a notch)`);
         }
       }
+      let overlap = false;
       for (let a = 0; a < centers.length; a++) {
         for (let b = a + 1; b < centers.length; b++) {
           const gap = Math.hypot(...sub(centers[a], centers[b]));
           if (gap <= JOIN_TOL) where.push(`${rowName(b)} is the same centre as ${rowName(a)} ${at(centers[a])}`);
           else if (step && gap < step.diameter) where.push(`${rowName(a)} and ${rowName(b)} are ${len(gap)} mm apart: their ${type === 'counterbore' ? 'counterbores' : 'countersinks'} ${len(step.diameter)} mm across would overlap (keep the centres at least ${len(step.diameter)} mm apart)`);
-          else if (D! > 0 && gap < D! && warnings.length < 8) warnings.push(`${rowName(a)} and ${rowName(b)} overlap: ${len(gap)} mm apart, the holes are ${len(D!)} mm across`);
+          else if (D! > 0 && gap < D!) {
+            overlap = true;
+            if (warnings.length < 8) warnings.push(`${rowName(a)} and ${rowName(b)} overlap: ${len(gap)} mm apart, the holes are ${len(D!)} mm across`);
+          }
         }
       }
       if (where.length) throw new ToolError('bad_input', `${where.slice(0, 12).join('; ')}.`, { detail: { field: where[0].split(/[: ]/)[0], face: label, problems: where.slice(0, 12) } });
@@ -542,7 +554,7 @@ const holeTool: EditTool<Plan> = {
         const d = sub(p, frame.origin as Vec3);
         return { u: dot(d, frame.xdir as Vec3), v: dot(d, ydirOf(frame)), hx: signed(read[r].texts, uAx), hy: signed(read[r].texts, vAx) };
       });
-      return { label, along, ref, frame, centers, uv, D: D!, deep, step, tipA, warnings, body: hit.body.id, bodyName: hit.body.name };
+      return { label, along, ref, frame, centers, uv, D: D!, deep, step, tipA, warnings, overlap, body: hit.body.id, bodyName: hit.body.name };
     });
 
     // ---- the sketch, compiled and solved headless before anything changes
@@ -645,6 +657,7 @@ const holeTool: EditTool<Plan> = {
       made: [],
       bore: null,
       tipMade: false,
+      overlap: found.overlap,
     };
   },
 
