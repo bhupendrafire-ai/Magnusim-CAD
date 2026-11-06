@@ -3,8 +3,8 @@
 //   Face       one flat face facing along X, Y or Z (a face selected before Hole is taken).
 //   Centres    model X, Y, Z of each centre (the coordinate along the face's normal is the
 //              face's own); a click on the face adds a centre where it was clicked; Add centre
-//              adds a row to type in; From a sketch puts a centre at each of a sketch's points
-//              and circle centres (they do not follow later edits of that sketch).
+//              adds a row to type in; From a sketch puts a hole at each of a sketch's points and
+//              circle centres, following them when that sketch changes (× goes back to centres).
 //   Size       Custom (Diameter, an expression: "5 mm", "hd"), Clearance hole (a bolt size, metric or
 //              inch, and a fit: ISO 273 / ASME B18.2.8) or Tapped hole (a metric or UNC/UNF thread:
 //              its tap drill, and its thread drawn in the view, or also cut into the wall: Thread
@@ -21,7 +21,7 @@
 // editable as sketches and extrudes, the same records the Assistant's hole stores.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
 import type { Vec3 } from '../../types/doc';
@@ -77,6 +77,7 @@ export function HolePanel({ close }: ToolPanelProps) {
   });
   const [active, setActive] = useState<'face' | 'centres'>(() => (face ? 'centres' : 'face'));
   const [rows, setRows] = useState<CentreRow[]>([]);
+  const pointsFromRef = useRef('');
   const [diameter, setDiameter] = useState('5 mm');
   const [sizing, setSizing] = useState<'custom' | 'clearance' | 'tapped'>('custom');
   const [system, setSystem] = useState<'metric' | 'unified'>('metric');
@@ -89,6 +90,9 @@ export function HolePanel({ close }: ToolPanelProps) {
   const [csDiameter, setCsDiameter] = useState('12 mm');
   const [csAngle, setCsAngle] = useState('90 deg');
   const [fromTable, setFromTable] = useState(true);
+  /** A sketch whose points are the centres (the holes follow them), or "". */
+  const [pointsFrom, setPointsFrom] = useState('');
+  pointsFromRef.current = pointsFrom;
   const [tip, setTip] = useState<HoleInput['tip']>('flat');
   const [tipAngle, setTipAngle] = useState('118 deg');
   const [depth, setDepth] = useState<'through' | 'blind'>('through');
@@ -99,7 +103,15 @@ export function HolePanel({ close }: ToolPanelProps) {
   const [note, setNote] = useState<string | null>(null);
 
   const fmt = (mm: number) => `${formatReadout(Math.round((mm / MM_PER[units.length]) * 1e4) / 1e4)} ${units.length}`;
-  const addCentre = (p: Vec3) => setRows((cur) => [...cur, { x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) }]);
+  // A click adding a centre leaves a sketch's points (read through a ref: the face picker keeps its first callback).
+  const addCentre = (p: Vec3) => {
+    if (pointsFromRef.current) {
+      setPointsFrom('');
+      setRows([{ x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) }]);
+      return;
+    }
+    setRows((cur) => [...cur, { x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) }]);
+  };
 
   usePicker(services, {
     id: 'hole',
@@ -164,21 +176,22 @@ export function HolePanel({ close }: ToolPanelProps) {
   const tabled = sizing === 'clearance' && fromTable && (type === 'counterbore' ? !!counterboreFor(size) : type === 'countersink' ? !!countersinkFor(size) : false);
   const doc = useStateStore(services.doc.state, (s) => s.doc);
   const sketches = doc.features.filter((f) => f.type === 'sketch' && f.entities.some((e) => e.kind === 'point' || e.kind === 'circle'));
-  /** Centres at the points of a sketch (its points and circle centres, as model coordinates). */
+  /** The holes at the points of a sketch (its points and circle centres), following them; the rows give way. */
   const fromSketch = (name: string) => {
     setError(null);
     try {
       const got = sketchPoints(services, name);
+      setPointsFrom(got.name);
       setRows(got.points.map((p) => ({ x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) })));
-      setNote(`${got.points.length} ${got.points.length === 1 ? 'centre' : 'centres'} from ${got.name}'s points: they stay where they are if that sketch changes later`);
+      setNote(`${got.points.length} ${got.points.length === 1 ? 'hole' : 'holes'} at ${got.name}'s points: they follow those points when ${got.name} changes`);
     } catch (e) {
       setError(holeError(e));
     }
   };
   const input = (): HoleInput => ({
     name: name.trim(),
-    centers: centreInput(rows, along),
-    points: '',
+    centers: pointsFrom ? [] : centreInput(rows, along),
+    points: pointsFrom,
     diameter: sized ? '' : diameter.trim(),
     size: sized ? size : '',
     fit: sizing === 'clearance' ? fit : sizing === 'tapped' ? 'tapped' : '',
@@ -267,7 +280,7 @@ export function HolePanel({ close }: ToolPanelProps) {
         />
         <div className={`cad-pick${active === 'centres' ? ' is-active' : ''}`} data-pick-field="hole-centres" data-active={active === 'centres' ? '1' : '0'} onClick={() => face && setActive('centres')}>
           <div className="cad-pick-head">
-            <span className="cad-pick-label">Centres ({rows.length})</span>
+            <span className="cad-pick-label">{pointsFrom ? `Centres: ${pointsFrom}'s points (${rows.length})` : `Centres (${rows.length})`}</span>
           </div>
           <table className="cad-p2-table" data-hole-centres="1">
             <tbody>
@@ -281,7 +294,7 @@ export function HolePanel({ close }: ToolPanelProps) {
                         aria-label={`Centre ${i + 1} ${a.toUpperCase()}`}
                         data-hole-coord={`${i}-${a}`}
                         spellCheck={false}
-                        disabled={along === k}
+                        disabled={along === k || !!pointsFrom}
                         placeholder={along === k ? 'on the face' : a.toUpperCase()}
                         value={along === k ? '' : r[a]}
                         onChange={(e) => setRows((cur) => cur.map((x, j) => (j === i ? { ...x, [a]: e.target.value } : x)))}
@@ -289,17 +302,32 @@ export function HolePanel({ close }: ToolPanelProps) {
                     </td>
                   ))}
                   <td>
-                    <button type="button" className="cad-vp-link" aria-label={`Remove centre ${i + 1}`} data-hole-remove={i} onClick={() => setRows((cur) => cur.filter((_, j) => j !== i))}>
-                      ×
-                    </button>
+                    {pointsFrom ? null : (
+                      <button type="button" className="cad-vp-link" aria-label={`Remove centre ${i + 1}`} data-hole-remove={i} onClick={() => setRows((cur) => cur.filter((_, j) => j !== i))}>
+                        ×
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <Button variant="link" onClick={() => setRows((cur) => [...cur, { x: '0 mm', y: '0 mm', z: '0 mm' }])} data-hole-add="1">
-            + Add centre
-          </Button>
+          {pointsFrom ? (
+            <Button
+              variant="link"
+              onClick={() => {
+                setPointsFrom('');
+                setNote(null);
+              }}
+              data-hole-own-centres="1"
+            >
+              Use my own centres instead
+            </Button>
+          ) : (
+            <Button variant="link" onClick={() => setRows((cur) => [...cur, { x: '0 mm', y: '0 mm', z: '0 mm' }])} data-hole-add="1">
+              + Add centre
+            </Button>
+          )}
           {sketches.length ? (
             <Field label="From a sketch" htmlFor="cad-hole-from-sketch" field="from-sketch">
               <Select

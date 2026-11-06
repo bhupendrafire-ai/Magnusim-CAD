@@ -12,6 +12,7 @@
 // says so.
 // Owner: P4b SELECT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { SketchOutput } from '../../types/sketch';
 import { createStateStore } from '../../lib/store';
 import { kernelLookup, refOfEdge, refOfFace, refOfVertex } from '../../naming';
 import type { BodyId, SketchLink, SketchLinkSource } from '../../types/doc';
@@ -50,6 +51,11 @@ export function sketchEnv(services: AppServices): LinkEnv {
     bodies,
     bodyName: (id) => names.get(id) ?? s.doc.bodies[id]?.name ?? 'a body',
     featureName: (id) => s.doc.features.find((f) => f.id === id)?.name ?? null,
+    sketch: (id) => {
+      const feature = s.doc.features.find((f) => f.id === id);
+      const out = s.rebuild.outputs[id];
+      return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature, out: out as SketchOutput } : null;
+    },
   };
 }
 

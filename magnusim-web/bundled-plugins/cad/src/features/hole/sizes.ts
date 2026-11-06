@@ -15,7 +15,7 @@
 // published charts each.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { ExtrudeExtentDef } from '../../types/doc';
+import type { ExtrudeExtentDef, ExtrudeFeature, Feature } from '../../types/doc';
 
 export type ClearanceFit = 'close' | 'normal' | 'loose';
 const MM_PER_IN = 25.4;
@@ -202,7 +202,18 @@ export function countersinkFor(size: string): { diameter: number } | null {
   return row ? { diameter: row[1] } : null;
 }
 
-/** How deep a cut's cosmetic thread runs, in words: a Blind cut's distance, else the whole hole (its cut's own extent). */
-export function threadDepthWords(extent: ExtrudeExtentDef): string {
+/** How deep a cut's thread runs, in words: a Blind cut's distance, else the whole hole (its cut's own extent). */
+function threadDepthWords(extent: ExtrudeExtentDef): string {
   return extent.kind === 'blind' ? `${extent.distance} deep` : extent.kind === 'through_all' ? 'the whole hole' : "the cut's depth";
+}
+
+/**
+ * A tapped hole's thread in words, for its cut's row in get_model and its Extrude panel: "M6x1 thread,
+ * 12 mm deep, cut into the wall (Hole 1 thread)" when a thread feature cuts it, else "... (cosmetic:
+ * drawn and listed, not modelled)".
+ */
+export function threadWords(features: readonly Feature[], cut: ExtrudeFeature): string {
+  if (!cut.thread) return '';
+  const by = features.find((g) => g.type === 'thread' && g.hole === cut.id && !g.suppressed);
+  return `${cut.thread.designation} thread, ${threadDepthWords(cut.extent)}${by ? `, cut into the wall (${by.name})` : ' (cosmetic: drawn and listed, not modelled)'}`;
 }

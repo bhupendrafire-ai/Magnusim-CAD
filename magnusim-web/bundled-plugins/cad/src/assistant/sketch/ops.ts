@@ -41,6 +41,7 @@
 // "f1.corner"; a mirror's copies "m1.<item>") and `made` lists the ids it keeps.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { SketchOutput } from '../../types/sketch';
 import { kernelLookup, refOfEdge, refOfFace, refOfVertex } from '../../naming';
 import { extendAt, trimAt, type EditOutcome } from '../../sketch/edit';
 import { entityOf, entityPoints, evaluateDimensions, isDimension, pointIdOf, withSolved } from '../../sketch/model';
@@ -436,6 +437,11 @@ export function toolHost(ctx: Pick2, o: { frame: PlaneFrame; scene: SceneOptions
               bodies: new Map(sc.bodies.map((b) => [b.id, { shape: b.shape, names: b.names, placement: b.placement }] as const)),
               bodyName: (id) => sc.bodies.find((b) => b.id === id)?.name ?? sc.state.doc.bodies[id]?.name ?? 'a body',
               featureName: (id) => sc.state.doc.features.find((f) => f.id === id)?.name ?? null,
+              sketch: (id) => {
+                const feature = sc.state.doc.features.find((f) => f.id === id);
+                const out = sc.state.rebuild.outputs[id];
+                return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature, out: out as SketchOutput } : null;
+              },
             };
             const src = source!;
             const words = sourceWords(src, env);

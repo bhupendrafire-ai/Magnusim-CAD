@@ -35,7 +35,7 @@ import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
 import { TAPER_MAX_DEG, TAPER_RANGE_WORDS } from './def';
-import { threadDepthWords } from '../hole/sizes';
+import { threadWords } from '../hole/sizes';
 
 const OPS: { value: BodyOp; label: string }[] = [
   { value: 'new', label: 'New body' },
@@ -421,7 +421,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
         {draft.thread ? (
           <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">
             <span id={`cad-f-${feature}-thread`} data-field="thread">
-              {draft.thread.designation}, {threadDepthWords(draft.extent)} (drawn, not modelled){' '}
+              {threadWords(doc.state.get().doc.features, draft)}{' '}
               <button type="button" className="cad-vp-link" data-thread-remove="1" onClick={() => update({ thread: null } as Partial<Feature>)}>
                 Remove
               </button>

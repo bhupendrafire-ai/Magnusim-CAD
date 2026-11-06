@@ -478,7 +478,12 @@ export type SketchLinkSource =
   /** Intersect: where the sketch plane cuts a body. */
   | { kind: 'section'; body: BodyId }
   /** A snap while drawing: where an edge pierces the sketch plane (the crossing nearest `near`, model mm). */
-  | { kind: 'pierce'; body: BodyId; ref: PersistentRef; near?: Vec3 };
+  | { kind: 'pierce'; body: BodyId; ref: PersistentRef; near?: Vec3 }
+  /**
+   * Another sketch's points (its point entities and circle centres, keyed "pt:<point id>"), seen
+   * along this sketch's normal: Hole's holes at a sketch's points follow them. No body.
+   */
+  | { kind: 'points'; feature: FeatureId; body?: undefined };
 
 export interface SketchLink {
   id: SketchLinkId;
