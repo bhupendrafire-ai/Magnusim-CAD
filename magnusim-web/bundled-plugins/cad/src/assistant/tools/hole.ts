@@ -10,6 +10,20 @@
 //      hky "-(b/2)"). Fully defined, so the holes follow their parameters;
 //   2. the extrude "<name>": all the circles cut into the face's body only, against the face's
 //      outward normal (flip: into the material), through that body or blind `distance` deep.
+// type counterbore or countersink adds, in the same sketch, a circle c1, c2... about each hole
+// (on its centre point, so they move together), its diameter dimension dc on c1 and c2... equal to
+// it (eqc2...), and before
+// the cut "<name>" the cut "<name> counterbore" (every disc and ring, blind cb_depth) or
+// "<name> countersink" (blind the cone's depth (cs_diameter - diameter) / 2 / tan(cs_angle / 2),
+// draft angle cs_angle / 2: a cone that narrows to the hole); "<name>" then cuts the discs only.
+// tip drill (blind holes) ends each hole in a drill point: the sketch "<name> tip sketch" on the
+// hole's bottom ("<name>.end"), the same circles placed the same way, and the cut "<name> tip"
+// (blind diameter / 2 / tan(tip_angle / 2), draft tip_angle / 2: to a point). Every size is an
+// expression the features keep, so they follow parameters.
+// size "M6" sizes the hole from a metric fastener (features/hole/sizes.ts): fit close, normal or
+// loose gives the ISO 273 clearance hole, fit tapped the tap drill (the thread is not modelled).
+// A blind hole that turns out deeper than the body went through: a warning says so (and a drill
+// tip it asked for is left out).
 // Every refusal comes before anything changes, each kind of problem all at once: the fields
 // (bad_input), the expressions (expr_error), then where the centres are (bad_input: off the
 // face's plane, outside the face, the same centre twice). A centre within half the diameter of the
@@ -18,11 +32,12 @@
 // nothing answers cut_removed_nothing with the diagnosis (region-tools.ts).
 // get_model full shows the two features as sketch and extrude inputs, with made_by "hole"; the
 // model changes them as such (edit_feature on the sketch's d changes every hole).
-// The person's Hole panel (features/hole) runs this same plan (planHole) and stores the same two
-// features (holeCutFields), so a hole either made is the other's: editable either way.
+// The person's Hole panel (features/hole) runs this same plan (planHole) and stores the same
+// features (holeSteps, cutFields), so a hole either made is the other's: editable either way.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE } from '../../features/extrude/def';
+import { clearanceDiameter, tapDrill, threadName, type ClearanceFit } from '../../features/hole/sizes';
 import { faceFrame, ydirOf } from '../../features/sketch/plane';
 import { nextName } from '../../lib/ids';
 import { isDimension } from '../../sketch/model';
@@ -57,8 +72,29 @@ export const ON_PLANE_MM = 1e-4;
 /** The most kernel measures of centres against the face's edges (the notch warning); past it a centre is not checked. */
 export const EDGE_MEASURES_MAX = 200;
 const SKETCH_SUFFIX = ' sketch';
-/** The longest name: its sketch is "<name> sketch", within the Part's name rule. */
+const STEP_SUFFIX = { counterbore: ' counterbore', countersink: ' countersink' } as const;
+const TIP_SKETCH_SUFFIX = ' tip sketch';
+const TIP_SUFFIX = ' tip';
+/** The longest name of a simple hole: its sketch is "<name> sketch", within the Part's name rule (a counterbore, countersink or drill tip leaves less). */
 export const HOLE_NAME_MAX = NAME_MAX - SKETCH_SUFFIX.length;
+/** A countersink's and a drill tip's angles when "" is sent. */
+export const CS_ANGLE_DEFAULT = '90 deg';
+export const TIP_ANGLE_DEFAULT = '118 deg';
+
+export type HoleType = 'simple' | 'counterbore' | 'countersink';
+const TYPES: readonly HoleType[] = ['simple', 'counterbore', 'countersink'];
+const FITS = ['close', 'normal', 'loose', 'tapped'] as const;
+
+/** One cut a hole makes, in order: the counterbore or countersink, the hole, the drill tip. */
+export interface HoleCut {
+  role: 'step' | 'bore' | 'tip';
+  name: string;
+  /** Its regions as selectors of its sketch ("all", "at(u, v)"). */
+  regions: string[];
+  extent: ExtrudeExtentDef;
+  /** The draft angle expression, or null. */
+  taper: string | null;
+}
 
 const AXES = ['x', 'y', 'z'] as const;
 
@@ -79,11 +115,24 @@ export interface HolePlan extends EditPlan {
   diameter: number;
   /** blind: the depth in mm; through: null. */
   depth: number | null;
+  type: HoleType;
+  /** The counterbore's or countersink's diameter and depth (mm), or null. */
+  step: { diameter: number; depth: number; angle: number | null } | null;
+  /** The cuts, in order (the hole's own is role bore). */
+  cuts: HoleCut[];
+  /** The drill tip: its sketch's name, compiled and solved (same frame as the hole's), or null. */
+  tip: { sketchName: string; compiled: Compiled; solved: Solved; angle: number; depth: number } | null;
+  /** "M6 clearance (normal fit)", "M6x1 tap drill", or "". */
+  sizeWords: string;
   warnings: string[];
   /** Warnings found after the Done (a scoped cut that missed a body). */
   late: string[];
   /** The sketch made (set by apply). */
   sketch: FeatureId | null;
+  /** Every feature made, in order (set by apply). */
+  made: FeatureId[];
+  /** The hole's own cut (role bore; set by apply). */
+  bore: FeatureId | null;
 }
 
 /** The model axis a direction runs along within 1 degree, and which way; or null. */
@@ -120,21 +169,30 @@ export function negated(expr: string): string {
   return `-(${t})`;
 }
 
-/** The names the call makes: the extrude's and its sketch's, both free (any case). */
-function holeNames(services: AppServices, asked: unknown): { name: string; sketch: string } {
+/** The suffixes of the features a hole of this type makes besides "<name>" (" sketch" first). */
+function suffixesOf(type: HoleType, tip: boolean): string[] {
+  return [SKETCH_SUFFIX, ...(type === 'simple' ? [] : [STEP_SUFFIX[type]]), ...(tip ? [TIP_SKETCH_SUFFIX, TIP_SUFFIX] : [])];
+}
+
+/** The names the call makes: the hole's cut and every other feature it makes, all free (any case). */
+function holeNames(services: AppServices, asked: unknown, type: HoleType = 'simple', tip = false): { name: string; sketch: string } {
   const features = services.doc.state.get().doc.features;
   const taken = (n: string) => features.find((f) => f.name.toLowerCase() === n.toLowerCase()) ?? null;
+  const suffixes = suffixesOf(type, tip);
+  const max = NAME_MAX - Math.max(...suffixes.map((x) => x.length));
   const want = str(asked);
   if (want) {
-    if (want.length > HOLE_NAME_MAX) throw new ToolError('bad_input', `name: at most ${HOLE_NAME_MAX} characters (its sketch is "<name>${SKETCH_SUFFIX}").`, { detail: { field: 'name' } });
+    if (want.length > max) throw new ToolError('bad_input', `name: at most ${max} characters (its other features are "<name>${suffixes.join('", "<name>')}").`, { detail: { field: 'name' } });
     const a = taken(want);
     if (a) throw new ToolError('name_taken', `name: another feature is already called ${a.name}.`, { detail: { field: 'name' } });
-    const b = taken(`${want}${SKETCH_SUFFIX}`);
-    if (b) throw new ToolError('name_taken', `name: the holes' sketch would be "${want}${SKETCH_SUFFIX}", and another feature is already called ${b.name}.`, { detail: { field: 'name' } });
+    for (const sfx of suffixes) {
+      const b = taken(`${want}${sfx}`);
+      if (b) throw new ToolError('name_taken', `name: the holes would make "${want}${sfx}", and another feature is already called ${b.name}.`, { detail: { field: 'name' } });
+    }
     return { name: want, sketch: `${want}${SKETCH_SUFFIX}` };
   }
   let k = Number(nextName('Hole', features.map((f) => f.name)).slice('Hole '.length));
-  while (taken(`Hole ${k}`) || taken(`Hole ${k}${SKETCH_SUFFIX}`)) k++;
+  while (taken(`Hole ${k}`) || suffixes.some((sfx) => taken(`Hole ${k}${sfx}`))) k++;
   return { name: `Hole ${k}`, sketch: `Hole ${k}${SKETCH_SUFFIX}` };
 }
 
@@ -151,6 +209,16 @@ function lengthOf(units: UnitsService, text: string, field: string, problems: st
   return r.value;
 }
 
+/** An angle expression's value (degrees), or null with the problem noted. */
+function angleOf(units: UnitsService, text: string, field: string, problems: string[]): number | null {
+  const r = units.evaluate(text, 'angle');
+  if (!r.ok) {
+    problems.push(`${field}: ${r.error}`);
+    return null;
+  }
+  return r.value;
+}
+
 /** A value and, when it is no plain number, what it comes to: "hd (5 mm)". */
 const valueWords = (text: string, mm: number) => (/^[-+]?[\d.]+\s*(mm)?$/.test(text.trim()) ? text.trim() : `${text.trim()} (${len(mm)} mm)`);
 
@@ -158,9 +226,28 @@ const at = (p: readonly number[]) => `(${p.map((v) => len(v)).join(', ')})`;
 
 type Plan = HolePlan;
 
-/** The cut extrude's fields for the holes' sketch regions: every circle, into the face's body only, into the material. */
-export function holeCutFields(plan: HolePlan, profiles: readonly RegionRef[]): Partial<Feature> {
-  return { name: plan.name, profiles: [...profiles], extent: plan.extent, flip: true, op: 'cut', scope: [plan.body] } as Partial<Feature>;
+/** One cut's extrude fields for its sketch's regions: into the face's body only, into the material. */
+export function cutFields(plan: HolePlan, cut: HoleCut, profiles: readonly RegionRef[]): Partial<Feature> {
+  return { name: cut.name, profiles: [...profiles], extent: cut.extent, flip: true, op: 'cut', scope: [plan.body], ...(cut.taper ? { taper: cut.taper } : {}) } as Partial<Feature>;
+}
+
+/** Whether the hole's own cut left a bottom ("<name>.end"): a blind hole deeper than the body has none. */
+export function hasBottom(services: AppServices, plan: HolePlan): boolean {
+  if (!plan.bore) return true;
+  return createdLabels(services, plan.bore, 500).labels.some((l) => l === `${plan.name}.end`);
+}
+
+/** The warning for a blind hole that went through. */
+export const throughWords = (plan: HolePlan) => `${plan.name} is ${len(plan.depth ?? 0)} mm deep, deeper than ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
+
+/** The hole's bottom as a sketch support (after its cut is made). */
+export async function bottomOf(ctx: CallCtx, plan: HolePlan): Promise<SketchSupport> {
+  return withScene(ctx, {}, async (sc) => {
+    const { hit } = await selectOne(sc, `${plan.name}.end`, 'face', 'face');
+    if (hit.kind !== 'face') throw new ToolError('internal', `${plan.name}.end is not one face.`);
+    const ref = await faceRefOf(sc, hit);
+    return { kind: 'face', body: ref.body, face: ref.ref };
+  });
 }
 
 const holeTool: EditTool<Plan> = {
@@ -171,7 +258,15 @@ const holeTool: EditTool<Plan> = {
     const faceIn = str(input.face);
     const depth = input.depth;
     const distance = str(input.distance);
-    const diameter = str(input.diameter);
+    const size = str(input.size);
+    const fit = str(input.fit);
+    const type = (str(input.type) || 'simple') as HoleType;
+    const cbDiameter = str(input.cb_diameter);
+    const cbDepth = str(input.cb_depth);
+    const csDiameter = str(input.cs_diameter);
+    const csAngle = str(input.cs_angle) || (type === 'countersink' ? CS_ANGLE_DEFAULT : '');
+    const tip = (str(input.tip) || 'flat') as 'flat' | 'drill';
+    const tipAngle = str(input.tip_angle) || (tip === 'drill' ? TIP_ANGLE_DEFAULT : '');
     const rows = (Array.isArray(input.centers) ? input.centers : []) as unknown[];
 
     // ---- the fields
@@ -179,12 +274,36 @@ const holeTool: EditTool<Plan> = {
     if (!faceIn) problems.push('face: one flat face facing along X, Y or Z ("Plate.end", "Body 1 faces >Z")');
     if (!rows.length) problems.push('centers: at least one centre');
     if (rows.length > CENTERS_MAX) problems.push(`centers: at most ${CENTERS_MAX} (call hole again for more)`);
-    if (!diameter) problems.push('diameter: an expression such as "5 mm" or "hd"');
+    // The diameter: given, or from a metric size (fit close, normal or loose: ISO 273; tapped: the tap drill).
+    let diameter = str(input.diameter);
+    let sizeWords = '';
+    if (size || fit) {
+      if (!size) problems.push('size: a metric size such as "M6" with fit');
+      else if (!(FITS as readonly string[]).includes(fit)) problems.push('fit: close, normal or loose (a clearance hole for the bolt, ISO 273), or tapped (the tap drill)');
+      else if (diameter) problems.push('diameter: "" with size (the size gives it)');
+      else {
+        const mm = fit === 'tapped' ? tapDrill(size) : clearanceDiameter(size, fit as ClearanceFit);
+        if (mm == null) problems.push(`size: "${size}" is not a metric coarse size from M1.6 to M64`);
+        else {
+          diameter = `${mm} mm`;
+          sizeWords = fit === 'tapped' ? `${threadName(size)} tap drill ${mm} mm (the thread is not modelled)` : `${size.toUpperCase()} clearance, ${fit} fit (ISO 273): ${mm} mm`;
+        }
+      }
+    } else if (!diameter) problems.push('diameter: an expression such as "5 mm" or "hd" (or size and fit)');
     if (depth !== 'through' && depth !== 'blind') problems.push('depth: through or blind');
+    if (!TYPES.includes(type)) problems.push('type: simple, counterbore or countersink');
+    if (type === 'counterbore' && !cbDiameter) problems.push("cb_diameter: the counterbore's diameter, wider than the hole");
+    if (type === 'counterbore' && !cbDepth) problems.push("cb_depth: the counterbore's depth");
+    if (type !== 'counterbore' && (cbDiameter || cbDepth)) problems.push('cb_diameter, cb_depth: only with type counterbore; send ""');
+    if (type === 'countersink' && !csDiameter) problems.push("cs_diameter: the countersink's diameter at the face, wider than the hole");
+    if (type !== 'countersink' && (csDiameter || str(input.cs_angle))) problems.push('cs_diameter, cs_angle: only with type countersink; send ""');
+    if (tip !== 'flat' && tip !== 'drill') problems.push('tip: flat or drill');
+    if (tip === 'drill' && depth === 'through') problems.push('tip: drill only with depth blind (a through hole has no bottom)');
+    if (tip !== 'drill' && str(input.tip_angle)) problems.push('tip_angle: only with tip drill; send ""');
     if (depth === 'through' && distance) problems.push(`distance: "" with depth through (the holes go through the face's body)`);
     if (depth === 'blind' && !distance) problems.push('distance: the depth, such as "6 mm" or "t"');
     if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { problems } });
-    const names = holeNames(services, input.name);
+    const names = holeNames(services, input.name, TYPES.includes(type) ? type : 'simple', tip === 'drill');
 
     const found = await withScene(ctx, {}, async (sc) => {
       // ---- the face: one, flat, facing along an axis
@@ -215,6 +334,11 @@ const holeTool: EditTool<Plan> = {
       const exprs: string[] = [];
       const D = lengthOf(units, diameter, 'diameter', exprs);
       const deep = depth === 'blind' ? lengthOf(units, distance, 'distance', exprs) : null;
+      const cbD = type === 'counterbore' ? lengthOf(units, cbDiameter, 'cb_diameter', exprs) : null;
+      const cbH = type === 'counterbore' ? lengthOf(units, cbDepth, 'cb_depth', exprs) : null;
+      const csD = type === 'countersink' ? lengthOf(units, csDiameter, 'cs_diameter', exprs) : null;
+      const csA = type === 'countersink' ? angleOf(units, csAngle, 'cs_angle', exprs) : null;
+      const tipA = tip === 'drill' ? angleOf(units, tipAngle, 'tip_angle', exprs) : null;
       const read = rows.map((row, r) => {
         const cIn = (row && typeof row === 'object' ? row : {}) as Record<string, unknown>;
         const p: (number | null)[] = [null, null, null];
@@ -238,6 +362,24 @@ const holeTool: EditTool<Plan> = {
       const where: string[] = [];
       if (!(D! > 0)) where.push(`diameter: more than 0 (it is ${len(D!)} mm)`);
       if (deep !== null && !(deep > 0)) where.push(`distance: more than 0 (it is ${len(deep)} mm)`);
+      // The counterbore or countersink: wider than the hole, and (blind) shallower than it.
+      let step: HolePlan['step'] = null;
+      if (cbD !== null && cbH !== null) {
+        if (!(cbD > D!)) where.push(`cb_diameter: wider than the hole (${len(cbD)} mm, the hole is ${len(D!)} mm)`);
+        if (!(cbH > 0)) where.push(`cb_depth: more than 0 (it is ${len(cbH)} mm)`);
+        else if (deep !== null && !(cbH < deep)) where.push(`cb_depth: less than the hole's depth (${len(cbH)} mm, the hole is ${len(deep)} mm deep)`);
+        step = { diameter: cbD, depth: cbH, angle: null };
+      }
+      if (csD !== null && csA !== null) {
+        if (!(csD > D!)) where.push(`cs_diameter: wider than the hole (${len(csD)} mm, the hole is ${len(D!)} mm)`);
+        if (!(csA > 0 && csA < 180)) where.push(`cs_angle: more than 0 and less than 180 deg (it is ${len(csA)} deg)`);
+        else {
+          const h = (csD - D!) / 2 / Math.tan((csA * Math.PI) / 360);
+          if (deep !== null && csD > D! && !(h < deep)) where.push(`cs_diameter: its cone is ${len(h)} mm deep, more than the hole's ${len(deep)} mm`);
+          step = { diameter: csD, depth: h, angle: csA };
+        }
+      }
+      if (tipA !== null && !(tipA > 0 && tipA < 180)) where.push(`tip_angle: more than 0 and less than 180 deg (it is ${len(tipA)} deg)`);
       const centers: Vec3[] = [];
       for (const [r, row] of read.entries()) {
         const p = row.p as number[];
@@ -300,7 +442,7 @@ const holeTool: EditTool<Plan> = {
         const d = sub(p, frame.origin as Vec3);
         return { u: dot(d, frame.xdir as Vec3), v: dot(d, ydirOf(frame)), hx: signed(read[r].texts, uAx), hy: signed(read[r].texts, vAx) };
       });
-      return { label, along, ref, frame, centers, uv, D: D!, deep, warnings, body: hit.body.id, bodyName: hit.body.name };
+      return { label, along, ref, frame, centers, uv, D: D!, deep, step, tipA, warnings, body: hit.body.id, bodyName: hit.body.name };
     });
 
     // ---- the sketch, compiled and solved headless before anything changes
@@ -313,25 +455,68 @@ const holeTool: EditTool<Plan> = {
         { id: `${e.id}y`, kind: 'distance_y', refs: ['origin', `${e.id}.center`], value: found.uv[r].hy },
       ]),
     ];
-    const compiled = compileSketch({ entities, constraints, infer: false }, { units, stored: null });
+    // A counterbore or countersink: a circle about each hole, its diameter dc on c1, the others equal to it.
+    const stepExpr = type === 'counterbore' ? cbDiameter : type === 'countersink' ? csDiameter : '';
+    const rings: EntityIn[] = found.step ? found.uv.map((h, r) => ({ id: `c${r + 1}`, kind: 'circle', at: [h.u, h.v, found.step!.diameter / 2], construction: false })) : [];
+    const ringConstraints: ConstraintIn[] = rings.length
+      ? [
+          { id: 'dc', kind: 'diameter', refs: ['c1'], value: storeExpr(stepExpr, 'length', units) },
+          ...rings.slice(1).map((e) => ({ id: `eqc${e.id.slice(1)}`, kind: 'equal', refs: ['c1', e.id], value: '' })),
+        ]
+      : [];
+    const compiled = compileSketch({ entities: [...entities, ...rings], constraints: [...constraints, ...ringConstraints], infer: false }, { units, stored: null });
     const solved = await solveSketch(ctx, { ...compiled, geometry: compiled.draft });
     if (solved.state !== 'fully') throw new ToolError('internal', `The holes' sketch is not fully defined (dof ${solved.dof}).`);
 
+    const D = storeExpr(diameter, 'length', units);
     const extent: ExtrudeExtentDef = depth === 'blind' ? { kind: 'blind', distance: storeExpr(distance, 'length', units) } : { kind: 'through_all', both: false, distance: DEFAULT_DISTANCE[units.units().length] ?? '10 mm' };
+    const atText = (u: number, v: number) => `at(${len(u)}, ${len(v)})`;
+    const discs = found.uv.map((h) => atText(h.u, h.v));
+    const cuts: HoleCut[] = [];
+    if (found.step) {
+      // The ring of each hole: a point half way between the hole's circle and the step's.
+      const ringsAt = found.uv.map((h) => atText(h.u + (found.D + found.step!.diameter) / 4, h.v));
+      const S = storeExpr(stepExpr, 'length', units);
+      const A = type === 'countersink' ? storeExpr(csAngle, 'angle', units) : '';
+      cuts.push({
+        role: 'step',
+        name: `${names.name}${STEP_SUFFIX[type as 'counterbore' | 'countersink']}`,
+        regions: [...discs, ...ringsAt],
+        extent: { kind: 'blind', distance: type === 'counterbore' ? storeExpr(cbDepth, 'length', units) : `((${S}) - (${D})) / 2 / tan((${A}) / 2)` },
+        taper: type === 'countersink' ? `(${A}) / 2` : null,
+      });
+    }
+    cuts.push({ role: 'bore', name: names.name, regions: found.step ? discs : ['all'], extent, taper: null });
+
+    // The drill tip: the same circles on the hole's bottom (its frame turns the same way, so the same u and v), cut to a point.
+    let tipPlan: HolePlan['tip'] = null;
+    if (found.tipA !== null && found.deep !== null) {
+      const T = storeExpr(tipAngle, 'angle', units);
+      const tc = compileSketch({ entities, constraints, infer: false }, { units, stored: null });
+      const ts = await solveSketch(ctx, { ...tc, geometry: tc.draft });
+      if (ts.state !== 'fully') throw new ToolError('internal', `The drill tip's sketch is not fully defined (dof ${ts.dof}).`);
+      tipPlan = { sketchName: `${names.name}${TIP_SKETCH_SUFFIX}`, compiled: tc, solved: ts, angle: found.tipA, depth: found.D / 2 / Math.tan((found.tipA * Math.PI) / 360) };
+      cuts.push({ role: 'tip', name: `${names.name}${TIP_SUFFIX}`, regions: ['all'], extent: { kind: 'blind', distance: `(${D}) / 2 / tan((${T}) / 2)` }, taper: `(${T}) / 2` });
+    }
+
     const n = found.centers.length;
+    const resolved: Record<string, string> = {
+      face: `${found.label} (faces ${axisName(found.along)})`,
+      frame: frameWords(found.frame),
+      centers: `${n} ${n === 1 ? 'centre' : 'centres'}: ${found.centers.slice(0, 4).map(at).join(', ')}${n > 4 ? ` and ${n - 4} more` : ''}`,
+      diameter: sizeWords || valueWords(diameter, found.D),
+      depth: found.deep === null ? `through ${found.bodyName}` : `blind ${valueWords(distance, found.deep)} into ${found.bodyName}`,
+      op: `cut ${found.bodyName}`,
+    };
+    if (found.step && type === 'counterbore') resolved.counterbore = `${valueWords(cbDiameter, found.step.diameter)} across, ${valueWords(cbDepth, found.step.depth)} deep`;
+    if (found.step && type === 'countersink') resolved.countersink = `${valueWords(csDiameter, found.step.diameter)} across at ${len(found.step.angle!)} deg (${len(found.step.depth)} mm deep)`;
+    if (tipPlan) resolved.tip = `drill point ${len(tipPlan.angle)} deg (${len(tipPlan.depth)} mm past the hole's depth)`;
     return {
       part: partOf(names.name),
       value: false,
       own: null,
       feature: null,
-      resolved: {
-        face: `${found.label} (faces ${axisName(found.along)})`,
-        frame: frameWords(found.frame),
-        centers: `${n} ${n === 1 ? 'centre' : 'centres'}: ${found.centers.slice(0, 4).map(at).join(', ')}${n > 4 ? ` and ${n - 4} more` : ''}`,
-        diameter: valueWords(diameter, found.D),
-        depth: found.deep === null ? `through ${found.bodyName}` : `blind ${valueWords(distance, found.deep)} into ${found.bodyName}`,
-        op: `cut ${found.bodyName}`,
-      },
+      resolved,
       name: names.name,
       sketchName: names.sketch,
       support: { kind: 'face', body: found.ref.body, face: found.ref.ref },
@@ -345,9 +530,16 @@ const holeTool: EditTool<Plan> = {
       centers: found.centers,
       diameter: found.D,
       depth: found.deep,
+      type,
+      step: found.step,
+      cuts,
+      tip: tipPlan,
+      sizeWords,
       warnings: found.warnings,
       late: [],
       sketch: null,
+      made: [],
+      bore: null,
     };
   },
 
@@ -356,20 +548,42 @@ const holeTool: EditTool<Plan> = {
     // 1. The sketch on the face, through the person's own sketch mode.
     const sketch = await writeSketch(ctx, { target: { kind: 'new', support: plan.support, name: plan.sketchName }, geometry: plan.solved.geometry }, plan.compiled.refOf);
     plan.sketch = sketch;
+    plan.made.push(sketch);
     await heartbeat(ctx, services.doc.settled(ctx.signal), plan.sketchName);
-    // Between the sketch and the cut: a change of the person's here makes the step unclean.
-    await ctx.checkpoint({ hold: 'between-opens' });
-    // 2. The cut: every circle, into the face's body only.
-    const f = services.doc.state.get().doc.features.find((g) => g.id === sketch) as SketchFeature | undefined;
-    if (!f) throw new ToolError('internal', `${plan.sketchName} is not in the Part.`);
-    const regions = await withScene(ctx, { sketch }, (sc) => regionsOf(sc, f, ['all'], 'hole'));
-    const fields = holeCutFields(plan, regions.refs);
-    const id = await fillSwept(ctx, plan, { edit: null, type: 'extrude', fields, label: plan.name });
-    plan.late = await checkScoped(ctx, id);
+    // 2. The cuts in order (counterbore or countersink, the hole, the drill tip on its own sketch).
+    let on = sketch;
+    let onName = plan.sketchName;
+    for (const cut of plan.cuts) {
+      if (cut.role === 'tip') {
+        // The drill tip goes on the hole's bottom; a hole that went through has none.
+        if (!hasBottom(services, plan)) {
+          plan.late.push(`${throughWords(plan)}; the drill tip was left out`);
+          break;
+        }
+        await ctx.checkpoint({ hold: 'between-opens' });
+        const support = await bottomOf(ctx, plan);
+        on = await writeSketch(ctx, { target: { kind: 'new', support, name: plan.tip!.sketchName }, geometry: plan.tip!.solved.geometry }, plan.tip!.compiled.refOf);
+        onName = plan.tip!.sketchName;
+        plan.made.push(on);
+        await heartbeat(ctx, services.doc.settled(ctx.signal), onName);
+      }
+      // Between two features: a change of the person's here makes the step unclean.
+      await ctx.checkpoint({ hold: 'between-opens' });
+      const f = services.doc.state.get().doc.features.find((g) => g.id === on) as SketchFeature | undefined;
+      if (!f) throw new ToolError('internal', `${onName} is not in the Part.`);
+      const regions = await withScene(ctx, { sketch: on }, (sc) => regionsOf(sc, f, cut.regions, 'hole'));
+      const id = await fillSwept(ctx, plan, { edit: null, type: 'extrude', fields: cutFields(plan, cut, regions.refs), label: cut.name });
+      plan.made.push(id);
+      if (cut.role === 'bore') plan.bore = id;
+      plan.late.push(...(await checkScoped(ctx, id)));
+      if (cut.role === 'bore' && plan.depth !== null && !plan.tip && !hasBottom(services, plan)) plan.late.push(throughWords(plan));
+    }
+    // The reply speaks of the hole's own cut.
+    plan.own = plan.bore;
   },
 
   sealed(plan, ctx) {
-    const made = [plan.sketch, plan.own].filter((x): x is FeatureId => !!x);
+    const made = plan.made.length ? plan.made : [plan.sketch, plan.own].filter((x): x is FeatureId => !!x);
     const rt = runtimeOf(ctx.services);
     for (const id of made) rt?.madeBy.add(id);
     setMadeWith(ctx.services, made, 'hole');
@@ -382,7 +596,9 @@ const holeTool: EditTool<Plan> = {
     const sk = s.doc.features.find((g) => g.id === plan.sketch) as SketchFeature | undefined;
     const created = createdLabels(ctx.services, id);
     const n = plan.centers.length;
-    const what = `${n} ${n === 1 ? 'hole' : 'holes'} ${len(plan.diameter)} mm across, ${plan.depth === null ? 'through' : `${len(plan.depth)} mm deep`}, in ${plan.faceWords}`;
+    const kind = plan.type === 'simple' ? '' : `${plan.type === 'counterbore' ? 'counterbored' : 'countersunk'} `;
+    const holes = `${kind}${n === 1 ? 'hole' : 'holes'}`;
+    const what = `${n} ${holes} ${len(plan.diameter)} mm across, ${plan.depth === null ? 'through' : `${len(plan.depth)} mm deep${plan.tip ? ' with a drill point' : ''}`}, in ${plan.faceWords}`;
     const body = bodyWords(data);
     const text = `${f?.name ?? plan.name} ${data.feature?.state ?? 'ok'}: ${what}${body ? ` · ${body}` : ''}`;
     const dims = Object.fromEntries((sk?.constraints ?? []).filter(isDimension).map((c) => [c.id, c.expr]));
@@ -391,10 +607,13 @@ const holeTool: EditTool<Plan> = {
       summary: text,
       data: {
         ...data,
-        made: [sk?.name ?? plan.sketchName, f?.name ?? plan.name],
+        made: plan.made.length ? plan.made.map((m) => s.doc.features.find((g) => g.id === m)?.name ?? '').filter(Boolean) : [sk?.name ?? plan.sketchName, f?.name ?? plan.name],
         centers_mm: plan.centers.map((p) => vec(p)),
         diameter_mm: len(plan.diameter),
         depth_mm: plan.depth === null ? null : len(plan.depth),
+        ...(plan.type !== 'simple' && plan.step ? { [plan.type]: { diameter_mm: len(plan.step.diameter), depth_mm: len(plan.step.depth), ...(plan.step.angle != null ? { angle_deg: len(plan.step.angle) } : {}) } } : {}),
+        ...(plan.tip ? { tip: { angle_deg: len(plan.tip.angle), depth_mm: len(plan.tip.depth) } } : {}),
+        ...(plan.sizeWords ? { size: plan.sizeWords } : {}),
         dimensions: dims,
         created: created.labels,
         ...(created.more ? { created_more: created.more } : {}),

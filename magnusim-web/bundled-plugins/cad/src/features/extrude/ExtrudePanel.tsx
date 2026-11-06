@@ -6,7 +6,8 @@
 //              flat face while no profile is picked), extruded with no sketch
 //   Direction  Extent Blind / Symmetric / Two sides / Through all (Both sides) /
 //              Up to (a flat face or a vertex, and an Offset); Distance (and
-//              Distance 2); Flip direction; the arrow in the view drags the distance
+//              Distance 2); Draft angle (sketch profiles, Blind / Symmetric / Two sides);
+//              Flip direction; the arrow in the view drags the distance
 //   Operation  New body / Join / Cut / Intersect, once a body is made before
 //              it in history (or when it is not New body, so it can go back)
 // Every valid change applies live (the body is the preview); Done closes;
@@ -32,6 +33,7 @@ import { paletteOf } from '../../viewport/palette';
 import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
+import { TAPER_MAX_DEG } from './def';
 
 const OPS: { value: BodyOp; label: string }[] = [
   { value: 'new', label: 'New body' },
@@ -397,6 +399,23 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
           <Select id={`cad-f-${feature}-extent`} label="Extent" field="extent" value={ext.kind} onChange={(v) => setExtentKind(v as ExtrudeExtentDef['kind'])} options={EXTENTS.map((o) => ({ value: o.value, label: o.label }))} />
         </Field>
         {extentFields}
+        {!draft.face && (ext.kind === 'blind' || ext.kind === 'symmetric' || ext.kind === 'two' || draft.taper) ? (
+          <Field label="Draft angle" htmlFor={`cad-f-${feature}-taper`} field="taper">
+            <NumberUnitInput
+              id={`cad-f-${feature}-taper`}
+              field="taper"
+              label="Draft angle"
+              expr={draft.taper || '0 deg'}
+              quantity="angle"
+              units={unitsSvc}
+              validate={(v) => (Math.abs(v) <= TAPER_MAX_DEG ? null : `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°`)}
+              onCommit={(e) => {
+                const v = unitsSvc.evaluate(e, 'angle');
+                update({ taper: v.ok && v.value === 0 ? null : e } as Partial<Feature>);
+              }}
+            />
+          </Field>
+        ) : null}
         {direction.element('Along', 'direction', () => setDirActive(true), 'Click a line or centerline, a straight edge, an axis, or a plane or flat face (its normal), in the view or the tree, to extrude along it; remove it to go along the normal again')}
         <Field label="Flip direction" htmlFor={`cad-f-${feature}-flip`} field="flip">
           <input

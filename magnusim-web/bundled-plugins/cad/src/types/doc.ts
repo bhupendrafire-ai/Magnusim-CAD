@@ -762,6 +762,12 @@ export interface ExtrudeFeature extends FeatureBase<'extrude'>, BodyMaking {
    * instead of the profile's normal; flip reverses it. Absent or null: the normal.
    */
   direction?: AxisRef | null;
+  /**
+   * Draft angle (an angle expression): the side walls lean this far from the extrude direction,
+   * positive narrowing the profile as it goes (a countersink's cone, a moulding draft). Sketch
+   * profiles with Blind, Symmetric or Two sides only, along the normal. Absent, "" or 0: straight.
+   */
+  taper?: Expr | null;
 }
 
 // ------------------------------------------------------------ P4a: solids (SOLIDS)
