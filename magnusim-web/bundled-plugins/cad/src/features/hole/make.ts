@@ -17,7 +17,7 @@ import { personCall } from '../../assistant/person-call';
 import { regionsOf } from '../../assistant/region-tools';
 import { withScene } from '../../assistant/selectors/resolve';
 import { whole } from '../../assistant/sketch/write';
-import { boreWarning, bottomOf, cutFields, hasBottom, planHole, throughWords, type HolePlan } from '../../assistant/tools/hole';
+import { boreWarning, bottomOf, cutFields, hasBottom, planHole, threadFields, throughWords, type HolePlan } from '../../assistant/tools/hole';
 import type { Solved } from '../../assistant/sketch/solve';
 import type { SelectionItem } from '../../types/selection';
 
@@ -40,6 +40,8 @@ export interface HoleInput {
   cs_angle: string;
   tip: 'flat' | 'drill';
   tip_angle: string;
+  /** A tapped hole's thread: drawn only (cosmetic) or also cut into the wall (modelled). */
+  thread: 'cosmetic' | 'modelled';
 }
 
 /** The words of a refusal without the tool's reason prefix ("bad_input: ..."). */
@@ -137,7 +139,25 @@ export async function makeHoles(services: AppServices, plan: HolePlan): Promise<
         if (through) warnings.push(through);
       }
     }
-    // 3. One undo step, as the Assistant's hole is one.
+    // 3. A modelled thread: its feature through its panel (it cuts the thread into the wall).
+    if (plan.modelled && plan.bore) {
+      await doc.settled();
+      ui.openNew('thread', threadFields(plan));
+      const p = ui.state.get().panel;
+      if (p?.kind !== 'feature' || p.type !== 'thread' || !p.isNew) throw new Error(`${plan.modelled} could not be opened`);
+      const id = p.feature;
+      await doc.settled();
+      const st = doc.state.get().rebuild.features[id];
+      if (st?.state === 'error') {
+        p.session.discard();
+        throw new Error(`${plan.modelled} fails: ${st.message ?? 'it did not build'}`);
+      }
+      ui.closePanel();
+      if (!featureOf(services, id)) throw new Error(`${plan.modelled} was not kept`);
+      steps++;
+      made.push(id);
+    }
+    // 4. One undo step, as the Assistant's hole is one.
     const joined = doc.joinSteps(steps, plan.name);
     if (!joined.ok) console.warn('[cad] the hole stays several undo steps:', joined.reason);
     setMadeWith(services, made, 'hole');

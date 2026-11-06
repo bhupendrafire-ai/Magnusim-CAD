@@ -846,6 +846,19 @@ export interface FilletFeature extends FeatureBase<'fillet'> {
   radius: Expr;
 }
 
+/**
+ * Thread (Hole's tapped hole, modelled): the ISO metric internal thread of a tapped hole cut into
+ * its wall, from the hole's tap drill out to the thread's major diameter, round each of the hole's
+ * circles, from the face into the hole. `hole` is the hole's own cut (an extrude with `thread`):
+ * the thread follows its circles, depth and size. `length` "": the whole hole (a blind one stops a
+ * pitch short of its bottom), else that far. The body keeps its id.
+ */
+export interface ThreadFeature extends FeatureBase<'thread'> {
+  hole: FeatureId;
+  body: BodyId;
+  length: Expr;
+}
+
 /** Chamfer (proposal §2.5): an equal distance, or two distances (`flip` swaps their sides). Same picks as Fillet. */
 export interface ChamferFeature extends FeatureBase<'chamfer'> {
   body: BodyId;
@@ -1051,6 +1064,7 @@ export type Feature =
   | FilletFeature
   | ChamferFeature
   | ShellFeature
+  | ThreadFeature
   // P4a: reference geometry (REFERENCE)
   | RefPlaneFeature
   | RefAxisFeature
