@@ -11,14 +11,14 @@
 //              Modelled); Depth: Through (the face's body) or Blind (Depth).
 //   Type       Simple, Counterbore (diameter, depth) or Countersink (diameter at the face, angle);
 //              with a clearance hole, From the screw table fills them (ISO 4762 socket head,
-//              DIN 974-1; ISO 10642 countersunk head at 90°); a tapped hole gets a cosmetic thread,
-//              drawn in the view;
+//              DIN 974-1; ISO 10642 countersunk head at 90°);
 //   Bottom     a blind hole's: Flat or Drill point (its angle).
 //   Name       "" for the next free "Hole N".
 // Done runs the hole tool's own plan (every check, before anything changes: the refusal shows
 // here) and makes its features: "<name> sketch" and the cut "<name>" (with "<name> counterbore" or
-// "<name> countersink" before it, "<name> tip sketch" and "<name> tip" after it), one undo step,
-// editable as sketches and extrudes, the same records the Assistant's hole stores.
+// "<name> countersink" before it, "<name> tip sketch" and "<name> tip" after it, and a modelled
+// thread's "<name> thread"), one undo step, editable as sketches, extrudes and a thread, the same
+// records the Assistant's hole stores.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState } from 'react';
@@ -216,8 +216,12 @@ export function HolePanel({ close }: ToolPanelProps) {
   };
   const pickSizing = (v: 'custom' | 'clearance' | 'tapped') => {
     setSizing(v);
-    // An inch size changes form between the lists ("1/4" for a clearance hole, "1/4-20" for a thread).
-    if (system === 'unified') setSize(v === 'tapped' ? '1/4-20' : '1/4');
+    // An inch size changes form between the lists ("#10" for a clearance hole, "#10-24" for a thread): keep the size.
+    if (system !== 'unified') return;
+    const now = fastener(size);
+    const thread = now ? now.thread.split(' ')[0] : '1/4-20';
+    const bolt = now && now.clearance ? now.size : '1/4';
+    setSize(v === 'tapped' ? thread : bolt);
   };
   const done = async () => {
     if (!face && !rows.length) {
@@ -398,7 +402,7 @@ export function HolePanel({ close }: ToolPanelProps) {
             {!screw
               ? 'No such size'
               : sizing === 'tapped'
-                ? `Tap drill ${screw.tap.words} for ${screw.thread}; the thread is drawn in the view and listed${threadMode === 'modelled' ? ', and cut into the wall' : ''}.`
+                ? `Tap drill ${screw.tap.words} for ${screw.thread}; ${threadMode === 'modelled' ? 'the thread is cut into the wall (and labelled in the view)' : 'the thread is drawn in the view and listed, not modelled'}.`
                 : screw.clearance
                   ? `Clearance hole ${screw.clearance[fit].expr} (${screw.system === 'metric' ? 'ISO 273' : 'ASME B18.2.8'}, ${fit} fit).`
                   : `ASME B18.2.8 has no clearance hole for ${screw.size}.`}

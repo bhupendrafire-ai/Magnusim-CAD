@@ -12,7 +12,6 @@
 // says so.
 // Owner: P4b SELECT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { SketchOutput } from '../../types/sketch';
 import { createStateStore } from '../../lib/store';
 import { kernelLookup, refOfEdge, refOfFace, refOfVertex } from '../../naming';
 import type { BodyId, SketchLink, SketchLinkSource } from '../../types/doc';
@@ -22,7 +21,7 @@ import type { StateStore } from '../../types/state';
 import { newId } from '../../lib/ids';
 import type { SketchMode, SketchPointer, SketchTool } from '../mode';
 import { applyLinkCurves, type LinkDraft } from './curves';
-import { readLink, sourceWords, type LinkEnv } from './source';
+import { readLink, sketchReader, sourceWords, type LinkEnv } from './source';
 
 /** The Project / Intersect options and picks (the Sketch panel's block shows them). */
 export interface ProjectState {
@@ -51,11 +50,7 @@ export function sketchEnv(services: AppServices): LinkEnv {
     bodies,
     bodyName: (id) => names.get(id) ?? s.doc.bodies[id]?.name ?? 'a body',
     featureName: (id) => s.doc.features.find((f) => f.id === id)?.name ?? null,
-    sketch: (id) => {
-      const feature = s.doc.features.find((f) => f.id === id);
-      const out = s.rebuild.outputs[id];
-      return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature, out: out as SketchOutput } : null;
-    },
+    sketch: sketchReader(s.doc.features, (id) => s.rebuild.outputs[id]),
   };
 }
 

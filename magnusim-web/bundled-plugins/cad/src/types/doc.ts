@@ -852,7 +852,7 @@ export interface FilletFeature extends FeatureBase<'fillet'> {
 }
 
 /**
- * Thread (Hole's tapped hole, modelled): the ISO metric internal thread of a tapped hole cut into
+ * Thread (Hole's tapped hole, modelled): the ISO metric or Unified inch internal thread of a tapped hole cut into
  * its wall, from the hole's tap drill out to the thread's major diameter, round each of the hole's
  * circles, from the face into the hole. `hole` is the hole's own cut (an extrude with `thread`):
  * the thread follows its circles, depth and size. `length` "": the whole hole (a blind one stops a

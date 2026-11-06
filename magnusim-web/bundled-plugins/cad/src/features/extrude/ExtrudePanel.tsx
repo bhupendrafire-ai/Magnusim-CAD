@@ -211,6 +211,8 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   const doneDisabled = isNew && incomplete ? incomplete : null;
 
   const fieldErrors: string[] = [];
+  // A tapped hole's thread, said as its state is now (a thread feature added, failing or removed).
+  const threadText = useStateStore(doc.state, (s) => (draft.thread ? threadWords(s.doc.features, s.rebuild.features, draft) : ''));
   const unitsSvc = doc.units;
   const distanceField = (key: 'distance' | 'distance2', label: string, expr: Expr, validate: (v: number) => string | null) => {
     const id = `cad-f-${feature}-${key}`;
@@ -421,7 +423,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
         {draft.thread ? (
           <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">
             <span id={`cad-f-${feature}-thread`} data-field="thread">
-              {threadWords(doc.state.get().doc.features, draft)}{' '}
+              {threadText}{' '}
               <button type="button" className="cad-vp-link" data-thread-remove="1" onClick={() => update({ thread: null } as Partial<Feature>)}>
                 Remove
               </button>

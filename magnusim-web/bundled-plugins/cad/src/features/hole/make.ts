@@ -3,7 +3,8 @@
 // person's own paths: each sketch ("<name> sketch", and a drill tip's "<name> tip sketch" on the
 // hole's bottom) through sketch mode (startSketch, one apply of the solution, Finish), each cut
 // (a counterbore or countersink, "<name>", a drill tip) through the Extrude panel (openNew with the
-// hole tool's fields, Done). The undo steps are joined into one ("<name>"), as the Assistant's
+// hole tool's fields, Done), then a modelled thread's feature "<name> thread" through its panel. The
+// undo steps are joined into one ("<name>"), as the Assistant's
 // request is one, and the features are noted as made by hole (get_model's made_by). A failure
 // part way takes back what was made: nothing changes.
 // Owner: ASSISTANT (the person's side of hole).
@@ -30,7 +31,7 @@ export interface HoleInput {
   diameter: string;
   depth: 'through' | 'blind';
   distance: string;
-  /** "" or a metric size ("M6") with fit, which gives the diameter. */
+  /** "" or a fastener size ("M6", "1/4-20") with fit, which gives the diameter. */
   size: string;
   fit: '' | 'close' | 'normal' | 'loose' | 'tapped';
   type: 'simple' | 'counterbore' | 'countersink';

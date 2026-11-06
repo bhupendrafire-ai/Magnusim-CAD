@@ -1,5 +1,5 @@
-// The thread feature type (Hole's tapped hole, modelled): the ISO metric internal thread of a
-// tapped hole cut into its wall. `hole` names the hole's own cut (an extrude with `thread`); at each
+// The thread feature type (Hole's tapped hole, modelled): the ISO metric or Unified inch internal
+// thread of a tapped hole cut into its wall. `hole` names the hole's own cut (an extrude with `thread`); at each
 // rebuild the thread reads that cut's sketch (its circles h1, h2...: centres and the tap drill's
 // radius), its direction and depth, and the thread's size, so it follows the hole.
 // The groove is the basic profile's: 60 deg flanks, a flat P/8 wide at the major diameter, running
@@ -10,8 +10,9 @@
 // on the body): `length` "" is the whole wall, stopping a pitch short of a blind hole's bottom and
 // just inside a through hole's far face (a groove crossing that face is a boolean the kernel answers
 // with nothing removed, so it never does); else that far from the face, at most that. A cut that
-// removes nothing fails in words rather than passing as threaded. The body keeps its id; the
-// groove's faces are F:<id>:thread:<hole>.<k>.
+// removes nothing fails in words rather than passing as threaded. The hole must run along X, Y or
+// Z (as Hole makes it): a wall's length is measured by its box. The body keeps its id; the groove's
+// faces are F:<id>:thread:<hole>.<k>, which the Assistant's labels call "Face of <name> thread".
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -25,6 +26,9 @@ import type { SketchOutput } from '../../types/sketch';
 import type { UnitsService } from '../../types/units';
 import { toModel } from '../sketch/plane';
 import { kernelStep } from '../solids/build';
+import { fastener } from './sizes';
+
+const round3 = (v: number) => Math.round(v * 1000) / 1000;
 import { bodyFor } from '../solids/local';
 
 /** Profile planes per turn of the helix (16 holds the groove's volume within 0.2% of a true helix). */
@@ -95,14 +99,15 @@ function grooveSections(h: ThreadHole, rIn: number, R: number, P: number, turns:
  * body (the cut's side face of that circle, "F:<cut>:side:<h>[..." and the pieces later features
  * split it into), or null for a hole whose wall is not there.
  */
-async function wallLengths(ctx: Pick<BuildContext, 'kernel'>, body: BuiltBody, cut: FeatureId, ids: readonly string[], holes: readonly ThreadHole[]): Promise<(number | null)[]> {
+async function wallLengths(name: string, ctx: Pick<BuildContext, 'kernel'>, body: BuiltBody, cut: FeatureId, ids: readonly string[], holes: readonly ThreadHole[]): Promise<{ ok: true; value: (number | null)[] } | { ok: false; message: string }> {
   const faces = body.names?.faces ?? [];
   const of = ids.map((id) => faces.flatMap((n, i) => (n.split('|').some((p) => p.startsWith(`F:${cut}:side:${id}[`)) ? [i] : [])));
   const all = [...new Set(of.flat())];
-  if (!all.length) return ids.map(() => null);
-  const topo = (await ctx.kernel.call('topo', { id: body.shape, faces: all, edges: 'none', vertices: 'none', face_bbox: 'exact', face_mass: false })).result;
-  const box = new Map(topo.faces.map((t) => [t.i, t.bbox ?? null]));
-  return of.map((list, k) => {
+  if (!all.length) return { ok: true, value: ids.map(() => null) };
+  const topo = await kernelStep(name, () => ctx.kernel.call('topo', { id: body.shape, faces: all, edges: 'none', vertices: 'none', face_bbox: 'exact', face_mass: false }));
+  if (!topo.ok) return topo;
+  const box = new Map(topo.value.result.faces.map((t) => [t.i, t.bbox ?? null]));
+  const value = of.map((list, k) => {
     const { c, d } = holes[k];
     let far: number | null = null;
     for (const i of list) {
@@ -112,7 +117,11 @@ async function wallLengths(ctx: Pick<BuildContext, 'kernel'>, body: BuiltBody, c
     }
     return far;
   });
+  return { ok: true, value };
 }
+
+/** Whether a direction runs along X, Y or Z (within a degree): a wall's box then measures its length. */
+const alongAxis = (d: Vec3) => Math.max(Math.abs(d[0]), Math.abs(d[1]), Math.abs(d[2])) >= Math.cos(Math.PI / 180);
 
 export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
   type: 'thread',
@@ -147,12 +156,13 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
     const rHole = so.radii[circles[0].id] ?? circles[0].r;
     const n = so.plane.normal;
     const d: Vec3 = hole.flip ? [-n[0], -n[1], -n[2]] : [n[0], n[1], n[2]];
+    if (!alongAxis(d)) return { ok: false, message: `${f.name} failed: ${hole.name} does not run along X, Y or Z, and a thread is cut only into such a hole` };
     const holes: ThreadHole[] = circles.map((e) => ({ c: toModel(so.plane, so.points[(e as { c: string }).c]), d, x: so.plane.xdir as Vec3 }));
     const P = th.pitch;
     const R = th.major / 2;
     if (!(R > rHole)) return { ok: false, message: `${f.name} failed: ${th.designation}'s major diameter (${th.major} mm) is not wider than ${hole.name} (${2 * rHole} mm): nothing to cut` };
     const rIn = rHole - INSIDE * P;
-    if (R - rIn > 0.75 * P) return { ok: false, message: `${f.name} failed: ${hole.name} (${2 * rHole} mm) is too small for ${th.designation}: its tap drill is ${th.major - P} mm` };
+    if (R - rIn > 0.75 * P) return { ok: false, message: `${f.name} failed: ${hole.name} (${round3(2 * rHole)} mm) is too small for ${th.designation}: its tap drill is ${fastener(th.designation)?.tap.words ?? `${round3(th.major - P)} mm`}` };
 
     // ---- the body and how far each hole's thread runs: its own wall, measured on the body
     const b = bodyFor(f.name, f.body, ctx);
@@ -162,9 +172,10 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
     const wIn = P / 8 + 2 * (R - rIn) * Math.tan(Math.PI / 6);
     // Clear of a blind hole's bottom by a pitch; inside a through hole's far face by the groove's half width and a little.
     const clear = blind ? P : wIn / 2 + INSIDE * P;
-    const walls = await wallLengths(ctx, body, hole.id, circles.map((e) => e.id), holes);
+    const walls = await wallLengths(f.name, ctx, body, hole.id, circles.map((e) => e.id), holes);
+    if (!walls.ok) return walls;
     const lengths: number[] = [];
-    for (const [i, wall] of walls.entries()) {
+    for (const [i, wall] of walls.value.entries()) {
       if (wall == null) return { ok: false, message: `${f.name} failed: the wall of hole ${i + 1} of ${hole.name} is not on ${ctx.bodyName(f.body)}` };
       let L = wall - clear;
       if (v.length != null) {
@@ -201,10 +212,10 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
         return { ok: false, message: `${f.name} failed: cutting the thread gave an invalid solid${res.reason ? `: ${res.reason}` : ''}` };
       }
       // The kernel can answer a cut it could not do with the body unchanged: then say so, never "threaded".
-      const [before, after] = await Promise.all([body.shape, res.id].map(async (id) => (await ctx.kernel.call('props', { id, volume: true, bbox: 'none' })).result.volume ?? 0));
-      if (!(before - after > 1e-6 * Math.max(1, before))) {
+      const vols = await kernelStep(f.name, () => Promise.all([body.shape, res.id].map(async (id) => (await ctx.kernel.call('props', { id, volume: true, bbox: 'none' })).result.volume ?? 0)));
+      if (!vols.ok || !(vols.value[0] - vols.value[1] > 1e-6 * Math.max(1, vols.value[0]))) {
         await ctx.release([res.id]);
-        return { ok: false, message: `${f.name} failed: the kernel cut nothing (the thread's groove did not meet ${ctx.bodyName(f.body)}'s wall)` };
+        return vols.ok ? { ok: false, message: `${f.name} failed: the kernel cut nothing (the thread's groove did not meet ${ctx.bodyName(f.body)}'s wall)` } : vols;
       }
       const names = namesFromResult(f.id, res, new Map<ShapeId, FaceNames | null>([[body.shape, body.names], ...tools.map((t) => [t.shape, t.names] as [ShapeId, FaceNames])]));
       return { ok: true, bodies: [{ id: f.body, shape: res.id, valid: true, names }], removed: [] };

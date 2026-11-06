@@ -36,7 +36,9 @@
 // holes' sketch (and a drill tip's) holds each centre with a link to that sketch's point
 // (SketchLink source kind points, sketch/project/source.ts) instead of distance_x / distance_y, so
 // moving a point moves its hole at the next rebuild. The holes are the points there were: a point
-// added later gets none, and a point removed leaves its hole where it was (a lost reference warns).
+// added later gets none (the link never takes it in), and a point removed leaves its hole where it
+// was (a lost reference warns). That sketch becomes the holes' sketch's parent: it is hidden in
+// model view like any used sketch, and cannot be deleted while the holes follow it.
 // A blind hole that turns out deeper than the body went through (its cut left no bottom): a
 // warning says so, and a drill tip it asked for is left out (the reply then says so too).
 // Every refusal comes before anything changes, each kind of problem all at once: the fields
@@ -54,7 +56,8 @@
 import { DEFAULT_DISTANCE, TAPER_MAX_DEG } from '../../features/extrude/def';
 import { counterboreFor, COUNTERBORE_SIZES, countersinkFor, COUNTERSINK_SIZES, fastener, type ClearanceFit } from '../../features/hole/sizes';
 import type { SketchOutput } from '../../types/sketch';
-import { faceFrame, toModel, ydirOf } from '../../features/sketch/plane';
+import { faceFrame, ydirOf } from '../../features/sketch/plane';
+import { sketchPoints3d } from '../../sketch/project/source';
 import { nextName } from '../../lib/ids';
 import { isDimension } from '../../sketch/model';
 import type { AppServices } from '../../types/app';
@@ -268,19 +271,13 @@ export function sketchPoints(services: AppServices, name: string): { name: strin
   if (!f) throw new ToolError('not_found', `points: no sketch is called "${name}". Sketches: ${sketches.map((g) => g.name).join(', ') || 'none'}.`, { detail: { field: 'points' } });
   const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
   if (!out || out.type !== 'sketch') throw new ToolError('bad_input', `points: ${f.name} did not build, so its points are not known.`, { detail: { field: 'points' } });
-  const ids: string[] = [];
-  for (const e of f.entities) {
-    const id = e.kind === 'point' ? e.p : e.kind === 'circle' ? e.c : null;
-    if (id && out.points[id] && !ids.includes(id)) ids.push(id);
-  }
+  // Its points (sketch/project/source.ts: the walk its link reads them by), each place once.
   const points: Vec3[] = [];
   const keys: string[] = [];
-  for (const id of ids) {
-    const q = toModel(out.plane, out.points[id]);
-    if (points.some((x) => Math.hypot(x[0] - q[0], x[1] - q[1], x[2] - q[2]) <= JOIN_TOL)) continue;
-    points.push(q);
-    // The key its link reads it by (sketch/project/source.ts sketchPointCurves).
-    keys.push(`pt:${id}`);
+  for (const q of sketchPoints3d(f, out)) {
+    if (points.some((x) => Math.hypot(x[0] - q.at[0], x[1] - q.at[1], x[2] - q.at[2]) <= JOIN_TOL)) continue;
+    points.push(q.at);
+    keys.push(q.key);
   }
   if (!points.length) throw new ToolError('bad_input', `points: ${f.name} has no points or circles to put holes at.`, { detail: { field: 'points' } });
   if (points.length > CENTERS_MAX) throw new ToolError('bad_input', `points: ${f.name} has ${points.length} points; hole takes at most ${CENTERS_MAX} (call hole again for the rest).`, { detail: { field: 'points' } });
@@ -292,10 +289,11 @@ export function sketchPoints(services: AppServices, name: string): { name: strin
  * centres follow another sketch's points: a point entity on each centre (l1, l2...) linked to that
  * sketch's point, and the centres' own placing dimensions taken out (the link holds them now).
  */
-function followPoints(solved: Solved, refOf: (id: string) => string, from: { feature: FeatureId; keys: string[] }): Solved {
+function followPoints(solved: Solved, from: { feature: FeatureId; keys: string[] }): Solved {
   const g = solved.geometry;
-  const linked = new Map(from.keys.map((key, i) => [refOf(`l${i + 1}`), key] as const));
-  const placing = new Set(from.keys.flatMap((_, i) => [refOf(`h${i + 1}x`), refOf(`h${i + 1}y`)]));
+  // A new sketch keeps the ids the plan wrote (l1, h1x...): no stored sketch renames them.
+  const linked = new Map<string, string>(from.keys.map((key, i) => [`l${i + 1}`, key]));
+  const placing = new Set(from.keys.flatMap((_, i) => [`h${i + 1}x`, `h${i + 1}y`]));
   const link = { id: 'lk1', type: 'projected' as const, source: { kind: 'points' as const, feature: from.feature }, entities: [...linked].map(([entity, key]) => ({ key, entity })) };
   return {
     ...solved,
@@ -626,7 +624,7 @@ const holeTool: EditTool<Plan> = {
     const compiled = compileSketch({ entities: [...entities, ...rings, ...anchors], constraints: [...constraints, ...ringConstraints], infer: false }, { units, stored: null });
     let solved = await solveSketch(ctx, { ...compiled, geometry: compiled.draft });
     if (solved.state !== 'fully') throw new ToolError('internal', `The holes' sketch is not fully defined (dof ${solved.dof}).`);
-    if (fromSketch) solved = followPoints(solved, compiled.refOf, fromSketch);
+    if (fromSketch) solved = followPoints(solved, fromSketch);
 
     const D = storeExpr(diameter, 'length', units);
     const extent: ExtrudeExtentDef = depth === 'blind' ? { kind: 'blind', distance: storeExpr(distance, 'length', units) } : { kind: 'through_all', both: false, distance: DEFAULT_DISTANCE[units.units().length] ?? '10 mm' };
@@ -656,7 +654,7 @@ const holeTool: EditTool<Plan> = {
       const tc = compileSketch({ entities: [...entities, ...anchors], constraints, infer: false }, { units, stored: null });
       let ts = await solveSketch(ctx, { ...tc, geometry: tc.draft });
       if (ts.state !== 'fully') throw new ToolError('internal', `The drill tip's sketch is not fully defined (dof ${ts.dof}).`);
-      if (fromSketch) ts = followPoints(ts, tc.refOf, fromSketch);
+      if (fromSketch) ts = followPoints(ts, fromSketch);
       tipPlan = { sketchName: `${names.name}${TIP_SKETCH_SUFFIX}`, compiled: tc, solved: ts, angle: found.tipA, depth: found.D / 2 / Math.tan((found.tipA * Math.PI) / 360) };
       cuts.push({ role: 'tip', name: `${names.name}${TIP_SUFFIX}`, regions: ['all'], extent: { kind: 'blind', distance: `(${D}) / 2 / tan((${T}) / 2)` }, taper: `(${T}) / 2` });
     }

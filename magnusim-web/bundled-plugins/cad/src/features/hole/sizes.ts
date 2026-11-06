@@ -122,7 +122,7 @@ function unifiedOf(row: (typeof UNIFIED)[number], tpi: number, series: 'UNC' | '
  */
 export function fastener(text: string): Fastener | null {
   const t = text.trim();
-  const m = /^m\s*(\d+(?:\.\d+)?)\s*(?:x\s*([\d.]+))?$/i.exec(t);
+  const m = /^m\s*(\d+(?:\.\d+)?)\s*(?:x\s*(\d+(?:\.\d+)?))?$/i.exec(t);
   if (m) {
     const row = METRIC.find((r) => Math.abs(r[0] - Number(m[1])) < 1e-9);
     if (!row || (m[2] !== undefined && Math.abs(Number(m[2]) - row[1]) > 1e-9)) return null;
@@ -209,11 +209,11 @@ function threadDepthWords(extent: ExtrudeExtentDef): string {
 
 /**
  * A tapped hole's thread in words, for its cut's row in get_model and its Extrude panel: "M6x1 thread,
- * 12 mm deep, cut into the wall (Hole 1 thread)" when a thread feature cuts it, else "... (cosmetic:
- * drawn and listed, not modelled)".
+ * 12 mm deep, cut into the wall (Hole 1 thread)" while a thread feature cuts it (built: the rule the
+ * view's threads.ts follows too), else "... (cosmetic: drawn and listed, not modelled)".
  */
-export function threadWords(features: readonly Feature[], cut: ExtrudeFeature): string {
+export function threadWords(features: readonly Feature[], states: Readonly<Record<string, { state?: string } | undefined>>, cut: ExtrudeFeature): string {
   if (!cut.thread) return '';
-  const by = features.find((g) => g.type === 'thread' && g.hole === cut.id && !g.suppressed);
+  const by = features.find((g) => g.type === 'thread' && g.hole === cut.id && !g.suppressed && states[g.id]?.state === 'ok');
   return `${cut.thread.designation} thread, ${threadDepthWords(cut.extent)}${by ? `, cut into the wall (${by.name})` : ' (cosmetic: drawn and listed, not modelled)'}`;
 }

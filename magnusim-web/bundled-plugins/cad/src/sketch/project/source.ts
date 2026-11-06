@@ -216,28 +216,39 @@ export async function projectSection(env: LinkEnv, shape: ShapeId, names: FaceNa
   return out;
 }
 
-/**
- * Another sketch's points as built (its point entities and circle centres, each place once), on this
- * sketch's plane, keyed "pt:<point id>".
- */
-export function sketchPointCurves(feature: SketchFeature, out: SketchOutput, plane: PlaneFrame): KeyedCurve[] {
-  const curves: KeyedCurve[] = [];
+/** A sketch's points as built, in model mm: its point entities and its circles' centres (each point id once), keyed "pt:<point id>". */
+export function sketchPoints3d(feature: SketchFeature, out: SketchOutput): { key: string; at: Vec3 }[] {
+  const pts: { key: string; at: Vec3 }[] = [];
   for (const e of feature.entities) {
     const id = e.kind === 'point' ? e.p : e.kind === 'circle' ? e.c : null;
-    if (!id || !out.points[id] || curves.some((c) => c.key === `pt:${id}`)) continue;
-    curves.push({ key: `pt:${id}`, curve: { kind: 'point', p: toPlaneUv(plane, toModel(out.plane, out.points[id])) } });
+    if (!id || !out.points[id] || pts.some((q) => q.key === `pt:${id}`)) continue;
+    pts.push({ key: `pt:${id}`, at: toModel(out.plane, out.points[id]) });
   }
-  return curves;
+  return pts;
+}
+
+/** Another sketch as built before the one reading it (a `points` source), from a document's features and outputs. */
+export function sketchReader(features: readonly { id: FeatureId; type: string }[], output: (id: FeatureId) => unknown): NonNullable<LinkEnv['sketch']> {
+  return (id) => {
+    const feature = features.find((g) => g.id === id);
+    const out = output(id) as SketchOutput | undefined;
+    return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature: feature as SketchFeature, out } : null;
+  };
 }
 
 /** Read one link from the bodies (or, for `points`, the sketch) as they are now. */
 export async function readLink(link: SketchLink, plane: PlaneFrame, env: LinkEnv): Promise<LinkRead> {
   const src = link.source;
   if (src.kind === 'points') {
+    // Only the points it was made with: a point added to that sketch later is not taken in (no stray
+    // point in this sketch); one removed is lost here, and its entity stays where it was.
     const sk = env.sketch?.(src.feature) ?? null;
     if (!sk) return { state: 'lost', message: `${sourceWords(src, env)}: that sketch is not there at this point` };
-    const curves = sketchPointCurves(sk.feature, sk.out, plane);
-    return curves.length ? { state: 'ok', curves } : { state: 'lost', message: `${sourceWords(src, env)}: it has no points` };
+    const keys = new Set(link.entities.map((r) => r.key));
+    const curves: KeyedCurve[] = sketchPoints3d(sk.feature, sk.out)
+      .filter((q) => keys.has(q.key))
+      .map((q) => ({ key: q.key, curve: { kind: 'point', p: toPlaneUv(plane, q.at) } }));
+    return curves.length ? { state: 'ok', curves } : { state: 'lost', message: `${sourceWords(src, env)}: none of its points is there now` };
   }
   const body = env.bodies.get(src.body);
   if (!body) return { state: 'lost', message: `${sourceWords(src, env)}: ${env.bodyName(src.body)} is not there at this point` };

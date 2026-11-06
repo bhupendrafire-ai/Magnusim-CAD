@@ -15,7 +15,7 @@ import type { BuildContext } from '../../types/doc-service';
 import type { SketchOutput } from '../../types/sketch';
 import { entityLabel } from '../model';
 import { applyLinkCurves, type LinkDraft } from './curves';
-import { readLink, type LinkEnv } from './source';
+import { readLink, sketchReader, type LinkEnv } from './source';
 
 /** The bodies a sketch's links read (the sketch feature's `uses`). */
 export function linkBodies(f: Pick<SketchFeature, 'links'>): BodyId[] {
@@ -36,11 +36,7 @@ export function envOf(ctx: Pick<BuildContext, 'kernel' | 'bodies' | 'bodyName' |
       const n = ctx.featureName(id);
       return n === 'a deleted feature' ? null : n;
     },
-    sketch: (id) => {
-      const feature = ctx.doc.features.find((g) => g.id === id);
-      const out = ctx.outputs.get(id);
-      return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature, out: out as SketchOutput } : null;
-    },
+    sketch: sketchReader(ctx.doc.features, (id) => ctx.outputs.get(id)),
   };
 }
 
