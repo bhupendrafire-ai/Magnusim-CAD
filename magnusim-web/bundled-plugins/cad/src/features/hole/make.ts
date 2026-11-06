@@ -25,6 +25,8 @@ import type { SelectionItem } from '../../types/selection';
 export interface HoleInput {
   name: string;
   centers: { x: string; y: string; z: string }[];
+  /** "" or a sketch whose points are the centres (centers [] then). */
+  points: string;
   diameter: string;
   depth: 'through' | 'blind';
   distance: string;

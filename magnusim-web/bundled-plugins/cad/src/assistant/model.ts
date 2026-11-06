@@ -160,6 +160,7 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   // What the tree shows as the row's info mark (a Join's pieces left apart): said, not warned.
   if (st?.note && (st.state === 'ok' || st.state === 'warning')) row.note = st.note;
   if (st?.actions?.length) row.actions = [...st.actions];
+  if (f.type === 'extrude' && f.thread) row.thread = `${f.thread.designation} cosmetic thread, ${f.thread.length || 'the whole hole'} (not modelled)`;
   if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
   // A kept structural edit of the Assistant's turned it red, and it still fails.
   if (st?.state === 'error' && runtimeOf(services)?.brokenBy.has(f.id)) row.broken_by_you = true;

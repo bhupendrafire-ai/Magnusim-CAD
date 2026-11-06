@@ -3,11 +3,14 @@
 //   Face       one flat face facing along X, Y or Z (a face selected before Hole is taken).
 //   Centres    model X, Y, Z of each centre (the coordinate along the face's normal is the
 //              face's own); a click on the face adds a centre where it was clicked; Add centre
-//              adds a row to type in.
+//              adds a row to type in; From a sketch puts a centre at each of a sketch's points
+//              and circle centres (they do not follow later edits of that sketch).
 //   Size       Custom (Diameter, an expression: "5 mm", "hd"), Clearance hole (a metric bolt size and
 //              fit: the ISO 273 hole) or Tapped hole (a metric size: its tap drill; the thread is
 //              not modelled); Depth: Through (the face's body) or Blind (Depth).
 //   Type       Simple, Counterbore (diameter, depth) or Countersink (diameter at the face, angle);
+//              with a metric size, From the screw table fills them (ISO 4762 socket head, DIN 974-1;
+//              ISO 10642 countersunk head); a tapped hole gets a cosmetic thread, drawn in the view;
 //   Bottom     a blind hole's: Flat or Drill point (its angle).
 //   Name       "" for the next free "Hole N".
 // Done runs the hole tool's own plan (every check, before anything changes: the refusal shows
@@ -30,7 +33,8 @@ import { PickList } from '../p2/PickList';
 import { usePicker, useSelectionMirror } from '../p2/pick';
 import { itemLabel } from '../measure/words';
 import { holeError, makeHoles, planFor, type HoleInput } from './make';
-import { clearanceDiameter, METRIC_SIZES, tapDrill, threadName, type ClearanceFit } from './sizes';
+import { clearanceDiameter, counterboreFor, countersinkFor, METRIC_SIZES, tapDrill, threadName, type ClearanceFit } from './sizes';
+import { sketchPoints } from '../../assistant/tools/hole';
 import { kernelLookup } from '../../naming';
 
 const AXES = ['x', 'y', 'z'] as const;
@@ -80,6 +84,7 @@ export function HolePanel({ close }: ToolPanelProps) {
   const [cbDepth, setCbDepth] = useState('6.5 mm');
   const [csDiameter, setCsDiameter] = useState('12 mm');
   const [csAngle, setCsAngle] = useState('90 deg');
+  const [fromTable, setFromTable] = useState(true);
   const [tip, setTip] = useState<HoleInput['tip']>('flat');
   const [tipAngle, setTipAngle] = useState('118 deg');
   const [depth, setDepth] = useState<'through' | 'blind'>('through');
@@ -151,18 +156,34 @@ export function HolePanel({ close }: ToolPanelProps) {
 
   const along = face?.along ?? null;
   const sized = sizing !== 'custom';
+  // A counterbore or countersink from the screw table: its fields go "" (the plan reads the table).
+  const tabled = sized && fromTable && (type === 'counterbore' ? !!counterboreFor(size) : type === 'countersink' ? !!countersinkFor(size) : false);
+  const doc = useStateStore(services.doc.state, (s) => s.doc);
+  const sketches = doc.features.filter((f) => f.type === 'sketch' && f.entities.some((e) => e.kind === 'point' || e.kind === 'circle'));
+  /** Centres at the points of a sketch (its points and circle centres, as model coordinates). */
+  const fromSketch = (name: string) => {
+    setError(null);
+    try {
+      const got = sketchPoints(services, name);
+      setRows(got.points.map((p) => ({ x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) })));
+      setNote(`${got.points.length} ${got.points.length === 1 ? 'centre' : 'centres'} from ${got.name}'s points: they stay where they are if that sketch changes later`);
+    } catch (e) {
+      setError(holeError(e));
+    }
+  };
   const input = (): HoleInput => ({
     name: name.trim(),
     centers: centreInput(rows, along),
+    points: '',
     diameter: sized ? '' : diameter.trim(),
     size: sized ? size : '',
     fit: sizing === 'clearance' ? fit : sizing === 'tapped' ? 'tapped' : '',
     depth,
     distance: depth === 'blind' ? distance.trim() : '',
     type,
-    cb_diameter: type === 'counterbore' ? cbDiameter.trim() : '',
-    cb_depth: type === 'counterbore' ? cbDepth.trim() : '',
-    cs_diameter: type === 'countersink' ? csDiameter.trim() : '',
+    cb_diameter: type === 'counterbore' && !tabled ? cbDiameter.trim() : '',
+    cb_depth: type === 'counterbore' && !tabled ? cbDepth.trim() : '',
+    cs_diameter: type === 'countersink' && !tabled ? csDiameter.trim() : '',
     cs_angle: type === 'countersink' ? csAngle.trim() : '',
     tip: depth === 'blind' ? tip : 'flat',
     tip_angle: depth === 'blind' && tip === 'drill' ? tipAngle.trim() : '',
@@ -263,6 +284,18 @@ export function HolePanel({ close }: ToolPanelProps) {
           <Button variant="link" onClick={() => setRows((cur) => [...cur, { x: '0 mm', y: '0 mm', z: '0 mm' }])} data-hole-add="1">
             + Add centre
           </Button>
+          {sketches.length ? (
+            <Field label="From a sketch" htmlFor="cad-hole-from-sketch" field="from-sketch">
+              <Select
+                id="cad-hole-from-sketch"
+                label="From a sketch"
+                field="from-sketch"
+                value=""
+                onChange={(v) => v && fromSketch(v)}
+                options={[{ value: '', label: 'Its points…' }, ...sketches.map((f) => ({ value: f.name, label: f.name }))]}
+              />
+            </Field>
+          ) : null}
           {active === 'centres' && face ? <Hint>Click on the face to put a centre there (model coordinates, {units.length}).</Hint> : null}
         </div>
         {note ? <Hint>{note}</Hint> : null}
@@ -303,7 +336,7 @@ export function HolePanel({ close }: ToolPanelProps) {
         ) : null}
         {sized ? (
           <Hint>
-            {sizeMm == null ? 'No such size' : sizing === 'tapped' ? `Tap drill ${sizeMm} mm for ${threadName(size)} (the thread itself is not modelled).` : `Clearance hole ${sizeMm} mm (ISO 273, ${fit} fit).`}
+            {sizeMm == null ? 'No such size' : sizing === 'tapped' ? `Tap drill ${sizeMm} mm for ${threadName(size)}; the thread is drawn in the view and listed, not modelled.` : `Clearance hole ${sizeMm} mm (ISO 273, ${fit} fit).`}
           </Hint>
         ) : (
           <Field label="Diameter" htmlFor="cad-hole-diameter" field="diameter">
@@ -358,9 +391,22 @@ export function HolePanel({ close }: ToolPanelProps) {
             ]}
           />
         </Field>
-        {type === 'counterbore' ? textField('cb-diameter', 'Counterbore diameter', cbDiameter, setCbDiameter) : null}
-        {type === 'counterbore' ? textField('cb-depth', 'Counterbore depth', cbDepth, setCbDepth) : null}
-        {type === 'countersink' ? textField('cs-diameter', 'Countersink diameter', csDiameter, setCsDiameter) : null}
+        {sized && type !== 'simple' ? (
+          <Field label="From the screw table" htmlFor="cad-hole-from-table" field="from-table">
+            <input id="cad-hole-from-table" type="checkbox" className="cad-check" data-field="from-table" checked={fromTable} onChange={(e) => setFromTable(e.target.checked)} />
+          </Field>
+        ) : null}
+        {tabled ? (
+          <Hint>
+            {type === 'counterbore'
+              ? `Counterbore ${counterboreFor(size)!.diameter} mm across, ${counterboreFor(size)!.depth} mm deep, for an ${size} socket head cap screw (ISO 4762, DIN 974-1).`
+              : `Countersink ${countersinkFor(size)!.diameter} mm across at 90°, for an ${size} countersunk head screw (ISO 10642).`}
+          </Hint>
+        ) : null}
+        {sized && fromTable && type !== 'simple' && !tabled ? <Hint>The screw table has no {size}: give the sizes.</Hint> : null}
+        {type === 'counterbore' && !tabled ? textField('cb-diameter', 'Counterbore diameter', cbDiameter, setCbDiameter) : null}
+        {type === 'counterbore' && !tabled ? textField('cb-depth', 'Counterbore depth', cbDepth, setCbDepth) : null}
+        {type === 'countersink' && !tabled ? textField('cs-diameter', 'Countersink diameter', csDiameter, setCsDiameter) : null}
         {type === 'countersink' ? textField('cs-angle', 'Countersink angle', csAngle, setCsAngle) : null}
         <Field label="Name" htmlFor="cad-hole-name" field="name">
           <input id="cad-hole-name" className="mgk-input" type="text" spellCheck={false} placeholder="Hole N" value={name} data-field="name" onChange={(e) => setName(e.target.value)} />

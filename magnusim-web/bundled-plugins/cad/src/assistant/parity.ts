@@ -250,6 +250,7 @@ export const FEATURE_FIELDS: FeatureFields = {
     face: reach('extrude', 'face'),
     direction: reach('extrude', 'direction'),
     taper: reach('extrude', 'taper'),
+    thread: reach('hole', 'fit'),
   },
   revolve: {
     ...BASE,
@@ -1120,6 +1121,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'centers[].x': HOLE,
     'centers[].y': HOLE,
     'centers[].z': HOLE,
+    points: HOLE,
     diameter: HOLE,
     size: HOLE,
     fit: HOLE,

@@ -1,5 +1,7 @@
 // Hole sizes from a metric fastener: the ISO 273 clearance hole for a bolt (close, normal or
-// loose fit) and the tap drill for an ISO metric coarse thread (major diameter minus pitch).
+// loose fit), the tap drill for an ISO metric coarse thread (major diameter minus pitch), the
+// counterbore for an ISO 4762 socket head cap screw (DIN 974-1) and the countersink for an
+// ISO 10642 countersunk head screw (its head's theoretical diameter at 90 deg).
 // The numbers are the standards' published values, cross-checked against SolidCraft's tables
 // (https://github.com/tangency-labs/solidcraft, MIT OR Apache-2.0); THIRD_PARTY_NOTICES.md credits it.
 // Owner: ASSISTANT (the person's side of hole).
@@ -61,6 +63,57 @@ export function tapDrill(size: string): number | null {
   const r = metricSize(size);
   return r ? Math.round((r.d - r.pitch) * 1000) / 1000 : null;
 }
+
+/**
+ * Counterbores for ISO 4762 socket head cap screws (DIN 974-1): the counterbore's diameter and
+ * depth (mm), the screw's head (dk, k) sitting just below the face. M3 to M30.
+ */
+const COUNTERBORES: readonly [number, number, number][] = [
+  [3, 6.5, 3.4],
+  [4, 8, 4.4],
+  [5, 10, 5.4],
+  [6, 11, 6.4],
+  [8, 15, 8.6],
+  [10, 18, 10.6],
+  [12, 20, 12.6],
+  [14, 24, 14.6],
+  [16, 26, 16.6],
+  [20, 33, 20.6],
+  [24, 40, 24.8],
+  [30, 48, 30.8],
+];
+
+/** Countersinks for ISO 10642 countersunk head screws: the head's theoretical diameter dk at 90 deg (mm), so it sits flush. M3 to M20. */
+const COUNTERSINKS: readonly [number, number][] = [
+  [3, 6.72],
+  [4, 8.96],
+  [5, 11.2],
+  [6, 13.44],
+  [8, 17.92],
+  [10, 22.4],
+  [12, 26.88],
+  [14, 30.8],
+  [16, 33.6],
+  [20, 40.32],
+];
+
+/** The counterbore for an ISO 4762 socket head cap screw of this size, or null. */
+export function counterboreFor(size: string): { diameter: number; depth: number } | null {
+  const r = metricSize(size);
+  const row = r ? COUNTERBORES.find((x) => Math.abs(x[0] - r.d) < 1e-9) : undefined;
+  return row ? { diameter: row[1], depth: row[2] } : null;
+}
+
+/** The countersink for an ISO 10642 countersunk head screw of this size (90 deg), or null. */
+export function countersinkFor(size: string): { diameter: number; angle: number } | null {
+  const r = metricSize(size);
+  const row = r ? COUNTERSINKS.find((x) => Math.abs(x[0] - r.d) < 1e-9) : undefined;
+  return row ? { diameter: row[1], angle: 90 } : null;
+}
+
+/** The sizes each table has, for the words of a refusal ("M3 to M30"). */
+export const COUNTERBORE_SIZES = 'M3 to M30';
+export const COUNTERSINK_SIZES = 'M3 to M20';
 
 /** "M6x1": a size with its coarse pitch, or null. */
 export function threadName(size: string): string | null {

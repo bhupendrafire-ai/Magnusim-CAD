@@ -6,7 +6,8 @@
 //              flat face while no profile is picked), extruded with no sketch
 //   Direction  Extent Blind / Symmetric / Two sides / Through all (Both sides) /
 //              Up to (a flat face or a vertex, and an Offset); Distance (and
-//              Distance 2); Draft angle (sketch profiles, Blind / Symmetric / Two sides);
+//              Distance 2); Draft angle (sketch profiles, Blind / Symmetric / Two sides); a
+//              tapped hole's cosmetic Thread (shown, with Remove);
 //              Flip direction; the arrow in the view drags the distance
 //   Operation  New body / Join / Cut / Intersect, once a body is made before
 //              it in history (or when it is not New body, so it can go back)
@@ -414,6 +415,16 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
                 update({ taper: v.ok && v.value === 0 ? null : e } as Partial<Feature>);
               }}
             />
+          </Field>
+        ) : null}
+        {draft.thread ? (
+          <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">
+            <span id={`cad-f-${feature}-thread`} data-field="thread">
+              {draft.thread.designation}, {draft.thread.length || 'the whole hole'} (drawn, not modelled){' '}
+              <button type="button" className="cad-vp-link" data-thread-remove="1" onClick={() => update({ thread: null } as Partial<Feature>)}>
+                Remove
+              </button>
+            </span>
           </Field>
         ) : null}
         {direction.element('Along', 'direction', () => setDirActive(true), 'Click a line or centerline, a straight edge, an axis, or a plane or flat face (its normal), in the view or the tree, to extrude along it; remove it to go along the normal again')}
