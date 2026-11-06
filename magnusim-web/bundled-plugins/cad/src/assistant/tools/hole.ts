@@ -35,7 +35,8 @@
 // centres), seen along the face's normal; centers is then []. The holes follow those points: the
 // holes' sketch (and a drill tip's) holds each centre with a link to that sketch's point
 // (SketchLink source kind points, sketch/project/source.ts) instead of distance_x / distance_y, so
-// moving a point moves its hole at the next rebuild.
+// moving a point moves its hole at the next rebuild. The holes are the points there were: a point
+// added later gets none, and a point removed leaves its hole where it was (a lost reference warns).
 // A blind hole that turns out deeper than the body went through (its cut left no bottom): a
 // warning says so, and a drill tip it asked for is left out (the reply then says so too).
 // Every refusal comes before anything changes, each kind of problem all at once: the fields
