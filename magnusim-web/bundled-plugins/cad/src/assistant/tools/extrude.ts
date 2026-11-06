@@ -19,7 +19,8 @@
 // get_model full shows extrudes as this tool's input (registerFeatureIo), regions as "at(u, v)";
 // edit_feature sets distance (an Up to's offset), distance2 and taper.
 // taper: a draft angle ("" or 0 for straight walls; + narrows the profile as it goes), sketch
-// profiles with blind, symmetric or two only.
+// profiles with blind, symmetric or two only. A tapped hole's cosmetic thread (ExtrudeFeature.thread,
+// made by hole) is not an input here: an edit keeps it.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE } from '../../features/extrude/def';
@@ -63,8 +64,8 @@ interface Plan extends EditPlan {
 
 /** A dry-run refusal of the extent as the field it came from (CAD's own words). */
 function extentError(why: string): ToolError {
-  const field = /^Distance 2/.test(why) || /add up to 0/.test(why) ? 'distance2' : /^Up to/.test(why) ? 'to' : /^Draft angle/.test(why) ? 'taper' : 'distance';
-  const reason = /^(Distance|Distance 1|Distance 2|Total distance|Offset): /.test(why) ? 'expr_error' : 'bad_input';
+  const field = /^Distance 2/.test(why) || /add up to 0/.test(why) ? 'distance2' : /^Up to/.test(why) ? 'to' : /draft angle/i.test(why) ? 'taper' : 'distance';
+  const reason = /^(Distance|Distance 1|Distance 2|Total distance|Offset|Draft angle): /.test(why) ? 'expr_error' : 'bad_input';
   return new ToolError(reason, `${field}: ${why}.`, { detail: { field } });
 }
 

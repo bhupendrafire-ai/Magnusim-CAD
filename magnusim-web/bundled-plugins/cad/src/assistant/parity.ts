@@ -250,6 +250,8 @@ export const FEATURE_FIELDS: FeatureFields = {
     face: reach('extrude', 'face'),
     direction: reach('extrude', 'direction'),
     taper: reach('extrude', 'taper'),
+    // Set by hole's fit tapped (the panel's Tapped hole). The person can also Remove it in the Extrude
+    // panel; the Assistant takes it back with undo, or deletes the hole's features.
     thread: reach('hole', 'fit'),
   },
   revolve: {

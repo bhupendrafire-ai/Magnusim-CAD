@@ -11,35 +11,37 @@
 //   2. the extrude "<name>": all the circles cut into the face's body only, against the face's
 //      outward normal (flip: into the material), through that body or blind `distance` deep.
 // type counterbore or countersink adds, in the same sketch, a circle c1, c2... about each hole
-// (on its centre point, so they move together), its diameter dimension dc on c1 and c2... equal to
-// it (eqc2...), and before
-// the cut "<name>" the cut "<name> counterbore" (every disc and ring, blind cb_depth) or
-// "<name> countersink" (blind the cone's depth (cs_diameter - diameter) / 2 / tan(cs_angle / 2),
-// draft angle cs_angle / 2: a cone that narrows to the hole); "<name>" then cuts the discs only.
+// (on its centre point, so they move together), its diameter dimension dc on c1 and c2... equal
+// to it (eqc2...), and before the cut "<name>" the cut "<name> counterbore" (each hole's disc and
+// ring, blind cb_depth) or "<name> countersink" (blind the cone's depth (cs_diameter - diameter) /
+// 2 / tan(cs_angle / 2), draft angle cs_angle / 2: a cone that narrows to the hole); "<name>" then
+// cuts the discs only. Two counterbores or countersinks that would overlap are refused.
 // tip drill (blind holes) ends each hole in a drill point: the sketch "<name> tip sketch" on the
-// hole's bottom ("<name>.end"), the same circles placed the same way, and the cut "<name> tip"
-// (blind diameter / 2 / tan(tip_angle / 2), draft tip_angle / 2: to a point). Every size is an
-// expression the features keep, so they follow parameters.
+// holes' bottom ("<name>.end", or "<name>.end(1)" with several holes: they lie in one plane), the
+// same circles placed the same way, and the cut "<name> tip" (blind diameter / 2 /
+// tan(tip_angle / 2), draft tip_angle / 2: to a point). Every size is an expression the features
+// keep, so they follow parameters.
 // size "M6" sizes the hole from a metric fastener (features/hole/sizes.ts): fit close, normal or
 // loose gives the ISO 273 clearance hole, fit tapped the tap drill and a cosmetic thread on the
-// hole's cut (ExtrudeFeature.thread: listed and drawn, the solid unchanged). With size, a
-// counterbore's cb_diameter and cb_depth left "" come from the ISO 4762 socket head screw's
-// (DIN 974-1), a countersink's cs_diameter from the ISO 10642 countersunk head screw's.
+// hole's cut (ExtrudeFeature.thread: listed and drawn over the cut's own depth, the solid
+// unchanged). With a clearance fit, a counterbore's cb_diameter and cb_depth left "" come from the
+// ISO 4762 socket head screw's (DIN 974-1), a countersink's cs_diameter (at 90 deg) from the
+// ISO 10642 countersunk head screw's.
 // points "<sketch>" puts a centre at each point of that sketch (its point entities and circle
 // centres), seen along the face's normal; centers is then []. The holes keep their own
 // dimensions: they do not follow later edits of that sketch.
-// A blind hole that turns out deeper than the body went through: a warning says so (and a drill
-// tip it asked for is left out).
+// A blind hole that turns out deeper than the body went through (its cut left no bottom): a
+// warning says so, and a drill tip it asked for is left out (the reply then says so too).
 // Every refusal comes before anything changes, each kind of problem all at once: the fields
 // (bad_input), the expressions (expr_error), then where the centres are (bad_input: off the
 // face's plane, outside the face, the same centre twice). A centre within half the diameter of the
 // face that is off it, or nearer one of its edges than that, cuts a notch: a warning names it
 // (measured against the face's edges, at most EDGE_MEASURES_MAX measures). A cut that removes
 // nothing answers cut_removed_nothing with the diagnosis (region-tools.ts).
-// get_model full shows the two features as sketch and extrude inputs, with made_by "hole"; the
-// model changes them as such (edit_feature on the sketch's d changes every hole).
+// get_model full shows the features it made (two to five) as sketch and extrude inputs, with
+// made_by "hole"; the model changes them as such (edit_feature on the sketch's d changes every hole).
 // The person's Hole panel (features/hole) runs this same plan (planHole) and stores the same
-// features (holeSteps, cutFields), so a hole either made is the other's: editable either way.
+// features (plan.cuts, cutFields), so a hole either made is the other's: editable either way.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE } from '../../features/extrude/def';
@@ -56,6 +58,7 @@ import { heartbeat } from '../busy';
 import { ToolError } from '../errors';
 import { createdLabels, NAME_MAX, str } from '../feature-tools';
 import { bodyWords } from '../judge';
+import { quoteName } from '../labels';
 import { setMadeWith } from '../made-with';
 import { frameWords } from '../model';
 import { dir, len, vec } from '../numbers';
@@ -142,6 +145,8 @@ export interface HolePlan extends EditPlan {
   made: FeatureId[];
   /** The hole's own cut (role bore; set by apply). */
   bore: FeatureId | null;
+  /** Whether the drill tip was made (apply leaves it out when the holes went through). */
+  tipMade: boolean;
 }
 
 /** The model axis a direction runs along within 1 degree, and which way; or null. */
@@ -266,20 +271,49 @@ export function sketchPoints(services: AppServices, name: string): { name: strin
   return { name: f.name, points };
 }
 
-/** Whether the hole's own cut left a bottom ("<name>.end"): a blind hole deeper than the body has none. */
-export function hasBottom(services: AppServices, plan: HolePlan): boolean {
-  if (!plan.bore) return true;
-  return createdLabels(services, plan.bore, 500).labels.some((l) => l === `${plan.name}.end`);
+/**
+ * The labels of the bottoms the hole's own cut left: "<name>.end" for one hole, "<name>.end(1)",
+ * "<name>.end(2)"... for several (the name quoted as labels quote it). A blind hole deeper than
+ * the body leaves none.
+ */
+export function bottomsOf(services: AppServices, plan: HolePlan): string[] {
+  if (!plan.bore) return [];
+  const q = quoteName(plan.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${q}\\.end(\\(\\d+\\))?$`);
+  return createdLabels(services, plan.bore, 500).labels.filter((l) => re.test(l));
 }
 
-/** The warning for a blind hole that went through. */
-export const throughWords = (plan: HolePlan) => `${plan.name} is ${len(plan.depth ?? 0)} mm deep, deeper than ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
+/** Whether the hole's own cut left a bottom (a blind hole that went through left none). */
+export const hasBottom = (services: AppServices, plan: HolePlan): boolean => !plan.bore || bottomsOf(services, plan).length > 0;
+
+/** The warning for blind holes that went through: all of them, or some. */
+export function throughWords(plan: HolePlan, bottoms = 0): string {
+  const n = plan.centers.length;
+  const some = bottoms > 0 && bottoms < n;
+  return some
+    ? `${n - bottoms} of the ${n} holes of ${plan.name} are deeper than ${plan.bodyName} there, so they go through (${len(plan.depth ?? 0)} mm deep)`
+    : `${plan.name} is ${len(plan.depth ?? 0)} mm deep, deeper than ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
+}
+
+/**
+ * After the hole's own cut: the warning for blind holes that went through (all of them, when no
+ * drill tip will say it; or some of them, unless the holes overlap and so share a bottom), or null.
+ */
+export function boreWarning(services: AppServices, plan: HolePlan): string | null {
+  if (plan.depth === null) return null;
+  const bottoms = bottomsOf(services, plan).length;
+  if (bottoms === 0) return plan.tip ? null : throughWords(plan);
+  if (bottoms < plan.centers.length && !plan.warnings.some((w) => / overlap: /.test(w))) return throughWords(plan, bottoms);
+  return null;
+}
 
 /** The hole's bottom as a sketch support (after its cut is made). */
 export async function bottomOf(ctx: CallCtx, plan: HolePlan): Promise<SketchSupport> {
   return withScene(ctx, {}, async (sc) => {
-    const { hit } = await selectOne(sc, `${plan.name}.end`, 'face', 'face');
-    if (hit.kind !== 'face') throw new ToolError('internal', `${plan.name}.end is not one face.`);
+    // Several holes' bottoms lie in one plane: the first one carries the tip's sketch.
+    const label = bottomsOf(sc.services, plan).sort()[0] ?? `${quoteName(plan.name)}.end`;
+    const { hit } = await selectOne(sc, label, 'face', 'face');
+    if (hit.kind !== 'face') throw new ToolError('internal', `${label} is not one face.`);
     const ref = await faceRefOf(sc, hit);
     return { kind: 'face', body: ref.body, face: ref.ref };
   });
@@ -323,35 +357,40 @@ const holeTool: EditTool<Plan> = {
         if (mm == null) problems.push(`size: "${size}" is not a metric coarse size from M1.6 to M64`);
         else {
           diameter = `${mm} mm`;
-          sizeWords = fit === 'tapped' ? `${threadName(size)} tap drill ${mm} mm (the thread is not modelled)` : `${size.toUpperCase()} clearance, ${fit} fit (ISO 273): ${mm} mm`;
+          sizeWords = fit === 'tapped' ? `${threadName(size)} tap drill ${mm} mm (its thread is drawn and listed, not modelled)` : `${size.toUpperCase()} clearance, ${fit} fit (ISO 273): ${mm} mm`;
         }
       }
     } else if (!diameter) problems.push('diameter: an expression such as "5 mm" or "hd" (or size and fit)');
     if (depth !== 'through' && depth !== 'blind') problems.push('depth: through or blind');
     if (!TYPES.includes(type)) problems.push('type: simple, counterbore or countersink');
-    // A counterbore or countersink left "" with a size: the screw head's (sizes.ts).
+    // A counterbore or countersink left "" with a clearance hole's size: the screw head's (sizes.ts).
     let headWords = '';
-    if (type === 'counterbore' && size && metricSize(size) && (!cbDiameter || !cbDepth)) {
+    let noTable = false;
+    const clearance = fit === 'close' || fit === 'normal' || fit === 'loose';
+    if (type === 'counterbore' && clearance && metricSize(size) && (!cbDiameter || !cbDepth)) {
       const cb = counterboreFor(size);
-      if (!cb) problems.push(`cb_diameter, cb_depth: the socket head screw table has ${COUNTERBORE_SIZES}; give them for ${size.toUpperCase()}`);
+      noTable = !cb;
+      if (!cb) problems.push(`cb_diameter, cb_depth: the socket head screw table has ${COUNTERBORE_SIZES}; give both for ${size.toUpperCase()}`);
       else {
         cbDiameter ||= `${cb.diameter} mm`;
         cbDepth ||= `${cb.depth} mm`;
         headWords = `for an ${size.toUpperCase()} socket head cap screw (ISO 4762, DIN 974-1)`;
       }
     }
-    if (type === 'countersink' && size && metricSize(size) && !csDiameter) {
+    const at90 = !str(input.cs_angle) || (services.doc.units.evaluate(str(input.cs_angle), 'angle') as { ok: boolean; value?: number }).value === 90;
+    if (type === 'countersink' && clearance && metricSize(size) && !csDiameter && at90) {
       const cs = countersinkFor(size);
+      noTable = !cs;
       if (!cs) problems.push(`cs_diameter: the countersunk screw table has ${COUNTERSINK_SIZES}; give it for ${size.toUpperCase()}`);
       else {
         csDiameter = `${cs.diameter} mm`;
         headWords = `for an ${size.toUpperCase()} countersunk head screw (ISO 10642)`;
       }
     }
-    if (type === 'counterbore' && !cbDiameter) problems.push("cb_diameter: the counterbore's diameter, wider than the hole (or \"\" with size: the screw table's)");
-    if (type === 'counterbore' && !cbDepth) problems.push("cb_depth: the counterbore's depth (or \"\" with size: the screw table's)");
+    if (type === 'counterbore' && !cbDiameter && !noTable) problems.push("cb_diameter: the counterbore's diameter, wider than the hole (or \"\" with a clearance size: the screw table's)");
+    if (type === 'counterbore' && !cbDepth && !noTable) problems.push("cb_depth: the counterbore's depth (or \"\" with a clearance size: the screw table's)");
     if (type !== 'counterbore' && (cbDiameter || cbDepth)) problems.push('cb_diameter, cb_depth: only with type counterbore; send ""');
-    if (type === 'countersink' && !csDiameter) problems.push("cs_diameter: the countersink's diameter at the face, wider than the hole (or \"\" with size: the screw table's)");
+    if (type === 'countersink' && !csDiameter && !noTable) problems.push("cs_diameter: the countersink's diameter at the face, wider than the hole (or \"\" with a clearance size and a 90 deg angle: the screw table's)");
     if (type !== 'countersink' && (csDiameter || str(input.cs_angle))) problems.push('cs_diameter, cs_angle: only with type countersink; send ""');
     if (tip !== 'flat' && tip !== 'drill') problems.push('tip: flat or drill');
     if (tip === 'drill' && depth === 'through') problems.push('tip: drill only with depth blind (a through hole has no bottom)');
@@ -398,13 +437,14 @@ const holeTool: EditTool<Plan> = {
       const tipA = tip === 'drill' ? angleOf(units, tipAngle, 'tip_angle', exprs) : null;
       // A sketch's points: their model coordinates, the one along the face's normal left to the face.
       const asRows: unknown[] = fromSketch ? fromSketch.points.map((q) => Object.fromEntries(AXES.map((a, i) => [a, i === k ? '' : `${len(q[i])} mm`]))) : rows;
+      const rowName = (r: number) => (fromSketch ? `points[${r}] (${fromSketch.name}'s point ${r + 1})` : `centers[${r}]`);
       const read = asRows.map((row, r) => {
         const cIn = (row && typeof row === 'object' ? row : {}) as Record<string, unknown>;
         const p: (number | null)[] = [null, null, null];
         const texts = ['', '', ''];
         AXES.forEach((a, i) => {
           const text = str(cIn[a]);
-          const field = `centers[${r}].${a}`;
+          const field = `${rowName(r)}.${a}`;
           if (!text) {
             if (i !== k) missing.push(`${field}: the centre's ${a.toUpperCase()} is needed (${facing})`);
             return;
@@ -449,7 +489,7 @@ const holeTool: EditTool<Plan> = {
           p[k] = rest / n[k];
         } else {
           const off = dot(n, sub(p as Vec3, c));
-          if (Math.abs(off) > ON_PLANE_MM) where.push(`centers[${r}].${A}: ${len(p[k])} mm is not on ${label}, which lies at ${A} = ${len(c[k])} mm: send "" for ${A}`);
+          if (Math.abs(off) > ON_PLANE_MM) where.push(`${rowName(r)}.${A}: ${len(p[k])} mm is not on ${label}, which lies at ${A} = ${len(c[k])} mm: send "" for ${A}`);
         }
         centers.push([p[0], p[1], p[2]]);
       }
@@ -460,17 +500,17 @@ const holeTool: EditTool<Plan> = {
         const edges = t.edges.filter((e) => e.type !== 'degenerate' && e.faces.includes(hit.index));
         let measures = EDGE_MEASURES_MAX;
         for (const [r, p] of centers.entries()) {
-          if (where.some((w) => w.startsWith(`centers[${r}].`))) continue;
+          if (where.some((w) => w.startsWith(`${rowName(r)}.`))) continue;
           const m = await sc.services.kernel.call('measure', { a: { id: hit.body.shape, face: hit.index }, b: { point: p } });
           const d = m.result.distance ?? Infinity;
           if (d >= D! / 2 - 1e-6) {
-            where.push(`centers[${r}] ${at(p)} is ${Number.isFinite(d) ? `${len(d)} mm` : 'far'} outside ${label} (a hole ${len(D!)} mm across needs its centre within ${len(D! / 2)} mm of the face)`);
+            where.push(`${rowName(r)} ${at(p)} is ${Number.isFinite(d) ? `${len(d)} mm` : 'far'} outside ${label} (a hole ${len(D!)} mm across needs its centre within ${len(D! / 2)} mm of the face)`);
             continue;
           }
           if (warnings.length >= 8) continue;
           // Within half the diameter but off the face, or on it nearer an edge than that: a notch, not a round hole.
           if (d > ON_PLANE_MM) {
-            warnings.push(`centers[${r}] ${at(p)} is ${len(d)} mm outside ${label}: the hole ${len(D!)} mm across breaks its edge (a notch)`);
+            warnings.push(`${rowName(r)} ${at(p)} is ${len(d)} mm outside ${label}: the hole ${len(D!)} mm across breaks its edge (a notch)`);
             continue;
           }
           if (measures < edges.length) continue;
@@ -480,14 +520,15 @@ const holeTool: EditTool<Plan> = {
             const em = await sc.services.kernel.call('measure', { a: { id: hit.body.shape, edge: e.i }, b: { point: p } });
             near = Math.min(near, em.result.distance ?? Infinity);
           }
-          if (near < D! / 2 - 1e-6) warnings.push(`centers[${r}] ${at(p)} is ${len(near)} mm from an edge of ${label}: the hole ${len(D!)} mm across breaks that edge (a notch)`);
+          if (near < D! / 2 - 1e-6) warnings.push(`${rowName(r)} ${at(p)} is ${len(near)} mm from an edge of ${label}: the hole ${len(D!)} mm across breaks that edge (a notch)`);
         }
       }
       for (let a = 0; a < centers.length; a++) {
         for (let b = a + 1; b < centers.length; b++) {
           const gap = Math.hypot(...sub(centers[a], centers[b]));
-          if (gap <= JOIN_TOL) where.push(`centers[${b}] is the same centre as centers[${a}] ${at(centers[a])}`);
-          else if (D! > 0 && gap < D! && warnings.length < 8) warnings.push(`centers[${a}] and centers[${b}] overlap: ${len(gap)} mm apart, the holes are ${len(D!)} mm across`);
+          if (gap <= JOIN_TOL) where.push(`${rowName(b)} is the same centre as ${rowName(a)} ${at(centers[a])}`);
+          else if (step && gap < step.diameter) where.push(`${rowName(a)} and ${rowName(b)} are ${len(gap)} mm apart: their ${type === 'counterbore' ? 'counterbores' : 'countersinks'} ${len(step.diameter)} mm across would overlap (keep the centres at least ${len(step.diameter)} mm apart)`);
+          else if (D! > 0 && gap < D! && warnings.length < 8) warnings.push(`${rowName(a)} and ${rowName(b)} overlap: ${len(gap)} mm apart, the holes are ${len(D!)} mm across`);
         }
       }
       if (where.length) throw new ToolError('bad_input', `${where.slice(0, 12).join('; ')}.`, { detail: { field: where[0].split(/[: ]/)[0], face: label, problems: where.slice(0, 12) } });
@@ -546,7 +587,7 @@ const holeTool: EditTool<Plan> = {
       });
     }
     const m = fit === 'tapped' ? metricSize(size) : null;
-    const thread: HoleThread | undefined = m ? { designation: threadName(size)!, major: m.d, pitch: m.pitch, length: depth === 'blind' ? storeExpr(distance, 'length', units) : '' } : undefined;
+    const thread: HoleThread | undefined = m ? { designation: threadName(size)!, major: m.d, pitch: m.pitch } : undefined;
     cuts.push({ role: 'bore', name: names.name, regions: found.step ? discs : ['all'], extent, taper: null, ...(thread ? { thread } : {}) });
 
     // The drill tip: the same circles on the hole's bottom (its frame turns the same way, so the same u and v), cut to a point.
@@ -571,7 +612,7 @@ const holeTool: EditTool<Plan> = {
     };
     if (found.step && type === 'counterbore') resolved.counterbore = `${valueWords(cbDiameter, found.step.diameter)} across, ${valueWords(cbDepth, found.step.depth)} deep${headWords ? ` ${headWords}` : ''}`;
     if (found.step && type === 'countersink') resolved.countersink = `${valueWords(csDiameter, found.step.diameter)} across at ${len(found.step.angle!)} deg (${len(found.step.depth)} mm deep)${headWords ? ` ${headWords}` : ''}`;
-    if (thread) resolved.thread = `${thread.designation} cosmetic thread, ${thread.length ? `${valueWords(distance, found.deep ?? 0)} deep` : 'the whole hole'} (drawn and listed, not modelled)`;
+    if (thread) resolved.thread = `${thread.designation} cosmetic thread over the hole's depth (drawn and listed, not modelled)`;
     if (fromSketch) resolved.centers = `${n} from ${fromSketch.name}'s points: ${resolved.centers.replace(/^\d+ centres?: /, '')}`;
     if (tipPlan) resolved.tip = `drill point ${len(tipPlan.angle)} deg (${len(tipPlan.depth)} mm past the hole's depth)`;
     return {
@@ -603,6 +644,7 @@ const holeTool: EditTool<Plan> = {
       sketch: null,
       made: [],
       bore: null,
+      tipMade: false,
     };
   },
 
@@ -623,6 +665,7 @@ const holeTool: EditTool<Plan> = {
           plan.late.push(`${throughWords(plan)}; the drill tip was left out`);
           break;
         }
+        plan.tipMade = true;
         await ctx.checkpoint({ hold: 'between-opens' });
         const support = await bottomOf(ctx, plan);
         on = await writeSketch(ctx, { target: { kind: 'new', support, name: plan.tip!.sketchName }, geometry: plan.tip!.solved.geometry }, plan.tip!.compiled.refOf);
@@ -639,7 +682,8 @@ const holeTool: EditTool<Plan> = {
       plan.made.push(id);
       if (cut.role === 'bore') plan.bore = id;
       plan.late.push(...(await checkScoped(ctx, id)));
-      if (cut.role === 'bore' && plan.depth !== null && !plan.tip && !hasBottom(services, plan)) plan.late.push(throughWords(plan));
+      const through = cut.role === 'bore' ? boreWarning(services, plan) : null;
+      if (through) plan.late.push(through);
     }
     // The reply speaks of the hole's own cut.
     plan.own = plan.bore;
@@ -659,9 +703,10 @@ const holeTool: EditTool<Plan> = {
     const sk = s.doc.features.find((g) => g.id === plan.sketch) as SketchFeature | undefined;
     const created = createdLabels(ctx.services, id);
     const n = plan.centers.length;
-    const kind = plan.type === 'simple' ? '' : `${plan.type === 'counterbore' ? 'counterbored' : 'countersunk'} `;
+    const thread = plan.cuts.find((c) => c.thread)?.thread;
+    const kind = `${plan.type === 'simple' ? '' : `${plan.type === 'counterbore' ? 'counterbored' : 'countersunk'} `}${thread ? `${thread.designation} tapped ` : ''}`;
     const holes = `${kind}${n === 1 ? 'hole' : 'holes'}`;
-    const what = `${n} ${holes} ${len(plan.diameter)} mm across, ${plan.depth === null ? 'through' : `${len(plan.depth)} mm deep${plan.tip ? ' with a drill point' : ''}`}, in ${plan.faceWords}`;
+    const what = `${n} ${holes} ${len(plan.diameter)} mm across, ${plan.depth === null ? 'through' : `${len(plan.depth)} mm deep${plan.tipMade ? ' with a drill point' : ''}`}, in ${plan.faceWords}`;
     const body = bodyWords(data);
     const text = `${f?.name ?? plan.name} ${data.feature?.state ?? 'ok'}: ${what}${body ? ` · ${body}` : ''}`;
     const dims = Object.fromEntries((sk?.constraints ?? []).filter(isDimension).map((c) => [c.id, c.expr]));
@@ -675,9 +720,9 @@ const holeTool: EditTool<Plan> = {
         diameter_mm: len(plan.diameter),
         depth_mm: plan.depth === null ? null : len(plan.depth),
         ...(plan.type !== 'simple' && plan.step ? { [plan.type]: { diameter_mm: len(plan.step.diameter), depth_mm: len(plan.step.depth), ...(plan.step.angle != null ? { angle_deg: len(plan.step.angle) } : {}) } } : {}),
-        ...(plan.tip ? { tip: { angle_deg: len(plan.tip.angle), depth_mm: len(plan.tip.depth) } } : {}),
+        ...(plan.tip && plan.tipMade ? { tip: { angle_deg: len(plan.tip.angle), depth_mm: len(plan.tip.depth) } } : {}),
         ...(plan.sizeWords ? { size: plan.sizeWords } : {}),
-        ...(plan.cuts.find((c) => c.thread) ? { thread: plan.cuts.find((c) => c.thread)!.thread!.designation } : {}),
+        ...(thread ? { thread: thread.designation } : {}),
         dimensions: dims,
         created: created.labels,
         ...(created.more ? { created_more: created.more } : {}),

@@ -34,7 +34,7 @@ import { paletteOf } from '../../viewport/palette';
 import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
-import { TAPER_MAX_DEG } from './def';
+import { TAPER_MAX_DEG, TAPER_RANGE_WORDS } from './def';
 
 const OPS: { value: BodyOp; label: string }[] = [
   { value: 'new', label: 'New body' },
@@ -409,7 +409,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
               expr={draft.taper || '0 deg'}
               quantity="angle"
               units={unitsSvc}
-              validate={(v) => (Math.abs(v) <= TAPER_MAX_DEG ? null : `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°`)}
+              validate={(v) => (Math.abs(v) <= TAPER_MAX_DEG ? null : TAPER_RANGE_WORDS)}
               onCommit={(e) => {
                 const v = unitsSvc.evaluate(e, 'angle');
                 update({ taper: v.ok && v.value === 0 ? null : e } as Partial<Feature>);
@@ -420,7 +420,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
         {draft.thread ? (
           <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">
             <span id={`cad-f-${feature}-thread`} data-field="thread">
-              {draft.thread.designation}, {draft.thread.length || 'the whole hole'} (drawn, not modelled){' '}
+              {draft.thread.designation}, {draft.extent.kind === 'blind' ? `${draft.extent.distance} deep` : 'the whole hole'} (drawn, not modelled){' '}
               <button type="button" className="cad-vp-link" data-thread-remove="1" onClick={() => update({ thread: null } as Partial<Feature>)}>
                 Remove
               </button>

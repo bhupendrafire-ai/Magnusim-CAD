@@ -17,7 +17,7 @@ import { personCall } from '../../assistant/person-call';
 import { regionsOf } from '../../assistant/region-tools';
 import { withScene } from '../../assistant/selectors/resolve';
 import { whole } from '../../assistant/sketch/write';
-import { bottomOf, cutFields, hasBottom, planHole, throughWords, type HolePlan } from '../../assistant/tools/hole';
+import { boreWarning, bottomOf, cutFields, hasBottom, planHole, throughWords, type HolePlan } from '../../assistant/tools/hole';
 import type { Solved } from '../../assistant/sketch/solve';
 import type { SelectionItem } from '../../types/selection';
 
@@ -133,7 +133,8 @@ export async function makeHoles(services: AppServices, plan: HolePlan): Promise<
       made.push(id);
       if (cut.role === 'bore') {
         plan.bore = id;
-        if (plan.depth !== null && !plan.tip && !hasBottom(services, plan)) warnings.push(throughWords(plan));
+        const through = boreWarning(services, plan);
+        if (through) warnings.push(through);
       }
     }
     // 3. One undo step, as the Assistant's hole is one.

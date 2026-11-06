@@ -771,17 +771,17 @@ export interface ExtrudeFeature extends FeatureBase<'extrude'>, BodyMaking {
   /**
    * A cosmetic thread (Hole's tapped hole): recorded, listed and drawn in the view (features/hole/
    * threads.ts), the solid unchanged. It runs from the sketch plane into the cut, round each of the
-   * hole's circles (h1, h2...), `length` deep ("": the hole's whole length through the body).
+   * hole's circles (h1, h2...), as deep as the cut goes (Blind: its distance; Through all: to the
+   * far side of the body), so it follows the cut's depth.
    */
   thread?: HoleThread | null;
 }
 
-/** A cosmetic ISO metric thread: "M6x1", its major diameter and pitch (mm), and how deep it runs. */
+/** A cosmetic ISO metric thread: "M6x1", its major diameter and pitch (mm). */
 export interface HoleThread {
   designation: string;
   major: number;
   pitch: number;
-  length: Expr;
 }
 
 // ------------------------------------------------------------ P4a: solids (SOLIDS)

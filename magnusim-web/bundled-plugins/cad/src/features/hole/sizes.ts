@@ -2,8 +2,9 @@
 // loose fit), the tap drill for an ISO metric coarse thread (major diameter minus pitch), the
 // counterbore for an ISO 4762 socket head cap screw (DIN 974-1) and the countersink for an
 // ISO 10642 countersunk head screw (its head's theoretical diameter at 90 deg).
-// The numbers are the standards' published values, cross-checked against SolidCraft's tables
-// (https://github.com/tangency-labs/solidcraft, MIT OR Apache-2.0); THIRD_PARTY_NOTICES.md credits it.
+// The numbers are the standards' published values; the clearance holes, pitches and ISO 4762
+// head sizes were cross-checked against SolidCraft's tables (https://github.com/tangency-labs/
+// solidcraft, MIT OR Apache-2.0), which THIRD_PARTY_NOTICES.md credits.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 

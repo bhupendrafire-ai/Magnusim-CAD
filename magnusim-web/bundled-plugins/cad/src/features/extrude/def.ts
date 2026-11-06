@@ -8,6 +8,10 @@
 // vertex of a body (with an offset), and a flat face of a body extruded directly
 // with no sketch (Daniel's item 8: `face`; kernel extrude_face; its side faces are
 // named by the edge they were swept from, F:<id>:side:E:<a>&<b>).
+// `taper`: a draft angle (sketch profiles, Blind / Symmetric / Two sides, along the
+// normal; kernel extrude_regions' taper_deg, + narrowing the profile). `thread`: a
+// tapped hole's cosmetic thread (Hole sets it; drawn by features/hole/threads.ts),
+// which this feature only keeps: it changes nothing in the build.
 // Owner: P3-PROFILES (src/features/extrude/); P4a extents and face: SOLIDS.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -50,6 +54,8 @@ export interface ExtrudeValues {
 
 /** The largest draft angle (degrees, either way): the walls must still go somewhere along the direction. */
 export const TAPER_MAX_DEG = 89;
+/** The words for a draft angle out of range (the panel's field says the same). */
+export const TAPER_RANGE_WORDS = `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°`;
 
 /** The draft angle's value in degrees (0 when it is absent or ""), checked. */
 export function resolveTaper(f: Pick<ExtrudeFeature, 'taper' | 'face' | 'direction' | 'extent'>, units: UnitsService): ResolveResult<number> {
@@ -58,10 +64,11 @@ export function resolveTaper(f: Pick<ExtrudeFeature, 'taper' | 'face' | 'directi
   const r = units.evaluate(t, 'angle');
   if (!r.ok) return { ok: false, message: `Draft angle: ${r.error}` };
   if (r.value === 0) return { ok: true, values: 0 };
-  if (!(Math.abs(r.value) <= TAPER_MAX_DEG)) return { ok: false, message: `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°` };
-  if (f.face) return { ok: false, message: 'Draft angle: a face extrude has straight walls; set it to 0' };
-  if (f.direction) return { ok: false, message: 'Draft angle: only along the normal; remove the direction or set it to 0' };
-  if (f.extent?.kind !== 'blind' && f.extent?.kind !== 'symmetric' && f.extent?.kind !== 'two') return { ok: false, message: 'Draft angle: only with Blind, Symmetric or Two sides; set it to 0' };
+  if (!(Math.abs(r.value) <= TAPER_MAX_DEG)) return { ok: false, message: TAPER_RANGE_WORDS };
+  // (Only an expression's own error reads "Draft angle: ...": the rules below are said as sentences.)
+  if (f.face) return { ok: false, message: 'A draft angle needs sketch profiles: a face extrude has straight walls (set it to 0)' };
+  if (f.direction) return { ok: false, message: 'A draft angle goes only along the normal: remove the direction or set it to 0' };
+  if (f.extent?.kind !== 'blind' && f.extent?.kind !== 'symmetric' && f.extent?.kind !== 'two') return { ok: false, message: 'A draft angle goes only with Blind, Symmetric or Two sides (set it to 0)' };
   return { ok: true, values: r.value };
 }
 
