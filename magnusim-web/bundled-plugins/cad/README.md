@@ -260,7 +260,8 @@ touching bodies apart.
 
 - **Extrude** (E): pick sketch regions (profiles). Extents: blind, two sides,
   symmetric, through all, or up to a face or a vertex, with an offset; along the
-  sketch normal or a chosen direction; Flip. You can also extrude a **flat face
+  sketch normal or a chosen direction; Flip; a **Draft angle** (walls that lean,
+  narrowing the profile as it goes). You can also extrude a **flat face
   of a body** directly, with no sketch: right-click it, **Extrude face**. A drag
   arrow in the view changes the distance.
 - **Revolve**: profiles about an axis (a centerline or line of the sketch, a
@@ -270,6 +271,16 @@ touching bodies apart.
   orientation**.
 - **Loft**: through two or more profiles, in the order you pick them (Move up /
   Move down); **Ruled** for straight sides.
+- **Hole** (a flat face's menu, or SOLID > Hole): round holes into one flat face
+  facing along X, Y or Z; click the face for each centre or type them. **Size**:
+  a custom diameter, a **clearance hole for a bolt** (M1.6 to M64, close, normal
+  or loose fit: ISO 273) or a **tapped hole** (its tap drill; the thread itself is
+  not modelled). **Type**: simple, **counterbore** (diameter, depth) or
+  **countersink** (diameter at the face, angle). Through, or blind with a flat
+  bottom or a **drill point**. It makes ordinary sketches and cut extrudes
+  ("Hole 1 sketch", "Hole 1", and "Hole 1 counterbore" or "Hole 1 tip"), one
+  undo step, that follow your parameters; a blind hole deeper than the body
+  says that it goes through.
 
 ## Modify: fillets, shells, booleans and direct edits
 
@@ -759,8 +770,8 @@ plane or a sketch. A curved face is refused in words.
 
 **Scope.** 0.1.0 makes multi-body parts. Assemblies and joints, surface
 modeling, 2D drawings, sheet metal and feature recognition on imported parts are
-not part of it. There is no hole wizard, draft, variable-radius fillet, guide
-rail for Loft or Sweep, or 3D sketch yet. A geometry that was added to a project
+not part of it. There is no variable-radius fillet, guide rail for Loft or
+Sweep, modelled thread, or 3D sketch yet. A geometry that was added to a project
 as a STEP file cannot be opened in CAD yet: start a Part and use Import STEP.
 
 **Size.** The kernel runs in the browser with at most 4 GB of memory. A 113 MB

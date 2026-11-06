@@ -41,6 +41,11 @@ also says how to rebuild the plugin with a changed OCCT, Analysis Situs or
 PlaneGCS. Analysis Situs' licence and copyright lines:
 `LICENSES/AnalysisSitus-BSD-3-Clause.txt`.
 
+The Hole tool's metric sizes (`src/features/hole/sizes.ts`: ISO 273 clearance holes and
+ISO 261 coarse pitches, the tap drill being the major diameter minus the pitch) are the
+standards' published values, cross-checked against SolidCraft's tables
+(https://github.com/tangency-labs/solidcraft, MIT OR Apache-2.0).
+
 ## The Assistant's provider packages
 
 The Assistant reaches the cloud model providers a user chooses, and local

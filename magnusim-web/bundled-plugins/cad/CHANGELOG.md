@@ -4,6 +4,29 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Hole makes counterbores, countersinks, drill points and fastener sizes (issue #7).**
+- SOLID > Hole has **Size**: Custom diameter, **Clearance hole for a bolt** (a
+  metric size M1.6 to M64 and a fit: close, normal or loose, the ISO 273 hole:
+  M6 normal is 6.6 mm) or **Tapped hole** (the tap drill: major diameter minus
+  the coarse pitch, M6x1 is 5 mm; the thread itself is not modelled).
+- **Type** Counterbore (diameter, depth) or Countersink (diameter at the face,
+  angle, 90 deg by default): a circle about each hole in the holes' sketch and a
+  cut "<name> counterbore" or "<name> countersink" before the hole's own cut.
+- A blind hole's **Bottom** can be a **Drill point** (118 deg by default):
+  "<name> tip sketch" on the hole's bottom and the cut "<name> tip" to a point.
+- Every size stays an expression the features keep, so the holes follow
+  parameters; it is all one undo step, as before. A simple hole is made exactly
+  as before. The Assistant's hole takes the same: size and fit, type,
+  cb_diameter, cb_depth, cs_diameter, cs_angle, tip and tip_angle.
+- A blind hole deeper than the body goes through: Hole now says so ("Hole 2 is
+  30 mm deep, deeper than Block there, so it goes through"), and leaves out a
+  drill point it asked for. It used to call it blind with no warning.
+
+**Extrude has a Draft angle.**
+- Sketch profiles with Blind, Symmetric or Two sides: the walls lean that far
+  from the extrude direction, a positive angle narrowing the profile as it goes
+  (up to 89 deg either way). The Assistant's extrude takes taper ("" for none).
+
 **Find picks fillets and drilled holes by their shape.**
 - INSPECT > Find (and the Assistant's find) takes `fillet` (a round face
   joining two faces smoothly, whatever made it; chamfers are not fillets),
